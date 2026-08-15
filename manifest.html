@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manifest — season downloader</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:ital,wght@0,400..700;1,400&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --void:#14161E;
+  --panel:#1C1F2A;
+  --panel-2:#232736;
+  --rule:#2E3446;
+  --ink:#DCDFE8;
+  --ink-dim:#858DA3;
+  --ink-faint:#5A6178;
+  --violet:#7C5CFF;
+  --violet-dim:#4A3A9E;
+  --amber:#F2A65A;
+  --bad:#D9556B;
+  --ok:#57C7A3;
+  --u:8px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--void);
+  color:var(--ink);
+  font-family:"Familjen Grotesk",system-ui,sans-serif;
+  font-size:15px;
+  line-height:1.45;
+  -webkit-font-smoothing:antialiased;
+}
+.mono{font-family:"JetBrains Mono",ui-monospace,monospace}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+input,select{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--violet);outline-offset:2px}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+.wrap{max-width:920px;margin:0 auto;padding:0 16px 96px}
+
+/* ---- masthead ---- */
+header{
+  display:flex;align-items:baseline;gap:12px;
+  padding:22px 0 14px;border-bottom:1px solid var(--rule);
+  flex-wrap:wrap;
+}
+.logo{
+  font-weight:700;font-size:19px;letter-spacing:-0.02em;
+}
+.logo em{font-style:normal;color:var(--violet)}
+.tag{color:var(--ink-faint);font-size:13px;letter-spacing:.02em}
+header .spacer{flex:1}
+.linkbtn{color:var(--ink-dim);font-size:13px;border-bottom:1px solid transparent;padding-bottom:1px}
+.linkbtn:hover{color:var(--ink);border-color:var(--violet)}
+
+/* ---- config ---- */
+#config{
+  display:none;margin-top:16px;padding:16px;
+  background:var(--panel);border:1px solid var(--rule);border-radius:4px;
+}
+#config.open{display:block}
+.field{margin-bottom:14px}
+.field:last-child{margin-bottom:0}
+label{display:block;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-dim);margin-bottom:5px}
+.hint{font-size:12.5px;color:var(--ink-faint);margin-top:5px;line-height:1.5}
+input[type=text],select{
+  width:100%;padding:9px 11px;background:var(--void);
+  border:1px solid var(--rule);border-radius:3px;
+  font-family:"JetBrains Mono",monospace;font-size:13px;
+}
+input[type=text]:focus,select:focus{border-color:var(--violet)}
+.row{display:flex;gap:12px;flex-wrap:wrap}
+.row>*{flex:1;min-width:150px}
+
+/* ---- search ---- */
+.searchbar{display:flex;gap:8px;margin:22px 0 0}
+.searchbar input{flex:1;font-family:"Familjen Grotesk",sans-serif;font-size:16px;padding:11px 13px}
+.go{
+  padding:0 20px;background:var(--violet);color:#fff;border-radius:3px;
+  font-weight:600;letter-spacing:.01em;
+}
+.go:hover{background:#8E71FF}
+.go:disabled{background:var(--panel-2);color:var(--ink-faint);cursor:default}
+
+.results{display:grid;grid-template-columns:repeat(auto-fill,minmax(108px,1fr));gap:12px;margin-top:18px}
+.card{text-align:left;border-radius:3px;overflow:hidden}
+.card img{width:100%;aspect-ratio:2/3;object-fit:cover;display:block;background:var(--panel-2);border:1px solid var(--rule);border-radius:3px}
+.card:hover img{border-color:var(--violet)}
+.card b{display:block;font-size:13px;font-weight:600;margin-top:6px;line-height:1.25}
+.card span{font-size:12px;color:var(--ink-faint)}
+
+/* ---- show head ---- */
+.showhead{display:flex;gap:16px;align-items:flex-start;margin-top:26px}
+.showhead img{width:76px;border-radius:3px;border:1px solid var(--rule)}
+.showhead h1{margin:0;font-size:26px;letter-spacing:-0.025em;line-height:1.1}
+.showhead p{margin:4px 0 0;color:var(--ink-faint);font-size:13px}
+
+.seasons{display:flex;gap:6px;flex-wrap:wrap;margin-top:20px}
+.seasons button{
+  padding:6px 13px;border:1px solid var(--rule);border-radius:2px;
+  font-family:"JetBrains Mono",monospace;font-size:12.5px;color:var(--ink-dim);
+}
+.seasons button:hover{border-color:var(--violet-dim);color:var(--ink)}
+.seasons button[aria-pressed=true]{background:var(--violet);border-color:var(--violet);color:#fff}
+
+/* ---- SIGNATURE: the probe strip ---- */
+.strip{
+  display:flex;gap:3px;margin-top:22px;padding:14px 12px 12px;
+  background:var(--panel);border:1px solid var(--rule);border-radius:4px;
+  overflow-x:auto;
+}
+.pip{
+  flex:0 0 auto;width:40px;text-align:center;
+  font-family:"JetBrains Mono",monospace;
+}
+.pip .n{font-size:10.5px;color:var(--ink-faint);letter-spacing:.04em}
+.pip .bar{
+  height:22px;margin-top:5px;border-radius:2px;
+  background:var(--panel-2);border:1px solid var(--rule);
+  position:relative;overflow:hidden;
+}
+.pip .q{
+  position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  font-size:9.5px;font-weight:700;letter-spacing:.02em;color:var(--void);
+}
+.pip[data-state=probing] .bar{border-color:var(--amber)}
+.pip[data-state=probing] .bar::after{
+  content:"";position:absolute;inset:0;
+  background:linear-gradient(90deg,transparent,var(--amber),transparent);
+  opacity:.5;animation:sweep 1.1s linear infinite;
+}
+@keyframes sweep{from{transform:translateX(-100%)}to{transform:translateX(100%)}}
+.pip[data-state=found] .bar{background:var(--violet);border-color:var(--violet)}
+.pip[data-state=found] .n{color:var(--ink)}
+.pip[data-state=none] .bar{border-color:var(--bad);border-style:dashed}
+.pip[data-state=none] .n{color:var(--bad)}
+.pip[data-off=true] .bar{background:var(--panel-2);border-color:var(--rule)}
+.pip[data-off=true] .q{color:var(--ink-faint)}
+
+/* ---- table ---- */
+.tbl{margin-top:14px;border:1px solid var(--rule);border-radius:4px;overflow:hidden}
+.ep{
+  display:flex;gap:11px;align-items:flex-start;
+  padding:11px 13px;border-bottom:1px solid var(--rule);
+  background:var(--panel);
+}
+.ep:last-child{border-bottom:none}
+.ep input[type=checkbox]{margin-top:3px;width:15px;height:15px;accent-color:var(--violet);flex:0 0 auto}
+.ep .code{font-family:"JetBrains Mono",monospace;font-size:12.5px;color:var(--ink-dim);flex:0 0 44px;padding-top:1px}
+.ep .body{flex:1;min-width:0}
+.ep .title{font-size:14px;font-weight:600;line-height:1.3}
+.ep .file{
+  font-family:"JetBrains Mono",monospace;font-size:11.5px;color:var(--ink-faint);
+  margin-top:3px;word-break:break-all;line-height:1.45;
+}
+.ep .file a{color:var(--ink-faint)}
+.ep .meta{display:flex;gap:8px;flex-wrap:wrap;margin-top:5px}
+.chip{
+  font-family:"JetBrains Mono",monospace;font-size:10.5px;letter-spacing:.03em;
+  padding:2px 6px;border:1px solid var(--rule);border-radius:2px;color:var(--ink-dim);
+}
+.chip.v{border-color:var(--violet-dim);color:#A38EFF}
+.ep.miss{opacity:.55}
+.ep .swap{font-size:11.5px;color:var(--ink-faint);border-bottom:1px solid transparent}
+.ep .swap:hover{color:var(--violet);border-color:var(--violet)}
+
+/* ---- alt picker ---- */
+.alts{padding:0 13px 11px 68px;background:var(--panel);border-bottom:1px solid var(--rule)}
+.alt{display:block;width:100%;text-align:left;padding:6px 9px;border:1px solid var(--rule);border-radius:2px;margin-bottom:5px;font-family:"JetBrains Mono",monospace;font-size:11.5px;color:var(--ink-dim);word-break:break-all}
+.alt:hover{border-color:var(--violet);color:var(--ink)}
+
+/* ---- dock ---- */
+.dock{
+  position:fixed;left:0;right:0;bottom:0;
+  background:rgba(20,22,30,.94);backdrop-filter:blur(10px);
+  border-top:1px solid var(--rule);
+  padding:11px 16px;
+  display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+  transform:translateY(110%);transition:transform .22s ease;
+}
+.dock.up{transform:none}
+.dock .count{font-family:"JetBrains Mono",monospace;font-size:12.5px;color:var(--ink-dim);margin-right:auto}
+.dock .count b{color:var(--ink)}
+.act{padding:8px 14px;border:1px solid var(--rule);border-radius:3px;font-size:13.5px;color:var(--ink-dim)}
+.act:hover{border-color:var(--violet);color:var(--ink)}
+.act.pri{background:var(--violet);border-color:var(--violet);color:#fff;font-weight:600}
+.act.pri:hover{background:#8E71FF}
+
+.note{margin-top:22px;padding:13px 15px;border:1px solid var(--rule);border-left:2px solid var(--amber);border-radius:3px;background:var(--panel);font-size:13px;color:var(--ink-dim);line-height:1.55}
+.note b{color:var(--ink)}
+.empty{padding:40px 0;text-align:center;color:var(--ink-faint);font-size:14px}
+.err{color:var(--bad)}
+.toast{position:fixed;bottom:74px;left:50%;transform:translateX(-50%) translateY(20px);opacity:0;background:var(--panel-2);border:1px solid var(--violet);border-radius:3px;padding:9px 16px;font-size:13px;transition:.2s;pointer-events:none}
+.toast.show{opacity:1;transform:translateX(-50%)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="logo">MANI<em>FEST</em></div>
+  <div class="tag">season → link list → download manager</div>
+  <div class="spacer"></div>
+  <button class="linkbtn" id="cfgToggle">settings</button>
+</header>
+
+<div id="config">
+  <div class="field">
+    <label for="addon">Stremio addon URL (debrid-enabled)</label>
+    <input type="text" id="addon" placeholder="https://torrentio.strem.fun/realdebrid=YOURKEY|sort=qualitysize/manifest.json" spellcheck="false">
+    <div class="hint">Paste the same configured URL you installed in Stremio — Torrentio, AIOStreams, Comet, MediaFusion. Anything after <span class="mono">/manifest.json</span> is trimmed automatically. Your key stays in this browser.</div>
+  </div>
+  <div class="row">
+    <div class="field">
+      <label for="pref">Prefer</label>
+      <select id="pref">
+        <option value="1080">1080p</option>
+        <option value="2160">2160p / 4K</option>
+        <option value="720">720p</option>
+        <option value="any">Biggest available</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="maxgb">Max size per episode (GB)</label>
+      <input type="text" id="maxgb" value="6" spellcheck="false">
+    </div>
+  </div>
+  <div class="field">
+    <label for="proxy">CORS proxy prefix (optional)</label>
+    <input type="text" id="proxy" placeholder="https://your-worker.workers.dev/?u=" spellcheck="false">
+    <div class="hint">Only needed if your addon blocks browser requests. The target URL is appended, encoded.</div>
+  </div>
+</div>
+
+<div class="searchbar">
+  <input type="text" id="q" placeholder="Search a series…" spellcheck="false">
+  <button class="go" id="goBtn">Search</button>
+</div>
+
+<div id="stage"></div>
+
+</div>
+
+<div class="dock" id="dock">
+  <div class="count" id="count"></div>
+  <button class="act" id="btnTxt">Save .txt</button>
+  <button class="act" id="btnAria">aria2 input</button>
+  <button class="act pri" id="btnCopy">Copy links</button>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+
+/* ---------- tiny store (works in sandboxes without localStorage) ---------- */
+const mem = {};
+const store = {
+  get(k){ try{ return localStorage.getItem(k); }catch(e){ return mem[k] ?? null; } },
+  set(k,v){ try{ localStorage.setItem(k,v); }catch(e){ mem[k]=v; } }
+};
+
+const CINEMETA = "https://v3-cinemeta.strem.io";
+const $ = s => document.querySelector(s);
+
+const cfg = {
+  get addon(){ return (store.get("mf.addon")||"").trim(); },
+  get proxy(){ return (store.get("mf.proxy")||"").trim(); },
+  get pref(){ return store.get("mf.pref")||"1080"; },
+  get maxgb(){ return parseFloat(store.get("mf.maxgb")||"6")||0; }
+};
+
+function base(url){
+  return url.replace(/\/manifest\.json.*$/i,"").replace(/\/+$/,"");
+}
+function via(url){
+  return cfg.proxy ? cfg.proxy + encodeURIComponent(url) : url;
+}
+async function getJSON(url, useProxy){
+  const r = await fetch(useProxy ? via(url) : url, {headers:{accept:"application/json"}});
+  if(!r.ok) throw new Error("HTTP "+r.status);
+  return r.json();
+}
+
+function toast(msg){
+  const t=$("#toast"); t.textContent=msg; t.classList.add("show");
+  clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove("show"),1900);
+}
+
+/* ---------- config wiring ---------- */
+["addon","proxy","maxgb"].forEach(id=>{
+  const el=$("#"+id); el.value = store.get("mf."+id)||el.value||"";
+  el.addEventListener("input",()=>store.set("mf."+id, el.value));
+});
+$("#pref").value = cfg.pref;
+$("#pref").addEventListener("change",e=>store.set("mf.pref",e.target.value));
+$("#cfgToggle").addEventListener("click",()=>{
+  $("#config").classList.toggle("open");
+});
+if(!cfg.addon) $("#config").classList.add("open");
+
+/* ---------- stream scoring ---------- */
+const SIZE_RE = /(\d+(?:[.,]\d+)?)\s*(GB|MB|GiB|MiB)/i;
+
+function parseStream(s){
+  const blob = [s.name, s.title, s.description, s.behaviorHints && s.behaviorHints.filename]
+    .filter(Boolean).join(" ");
+  let res = 0;
+  if(/2160|\b4k\b|uhd/i.test(blob)) res = 2160;
+  else if(/1080/.test(blob)) res = 1080;
+  else if(/720/.test(blob)) res = 720;
+  else if(/480|sd\b/i.test(blob)) res = 480;
+
+  let gb = 0;
+  const m = blob.match(SIZE_RE);
+  if(m){
+    const n = parseFloat(m[1].replace(",", "."));
+    gb = /^m/i.test(m[2]) ? n/1024 : n;
+  }
+
+  let file = (s.behaviorHints && s.behaviorHints.filename) || "";
+  if(!file){
+    const line = blob.split("\n").map(x=>x.trim()).find(x=>/\.(mkv|mp4|avi|m4v)$/i.test(x));
+    if(line) file = line.replace(/^[^\w]+/,"");
+  }
+
+  // Torrentio/AIOStreams mark instantly-available debrid results
+  const cached = /\bRD\+|\[RD\+\]|⚡|instant|cached/i.test(blob);
+
+  return {raw:s, url:s.url, res, gb, file, cached, label: blob.replace(/\s+/g," ").trim().slice(0,150)};
+}
+
+function rank(a){
+  const pref = cfg.pref, cap = cfg.maxgb;
+  let score = 0;
+  if(a.cached) score += 1000;                       // never wait on an uncached torrent
+  if(cap && a.gb > cap) score -= 800;               // over budget
+  if(pref === "any") score += a.gb * 4;
+  else {
+    const p = parseInt(pref,10);
+    score += a.res === p ? 500 : -Math.abs(a.res - p)/10;
+    score += Math.min(a.gb,20) * 2;                 // within a tier, bigger ≈ better
+  }
+  return score;
+}
+
+function pickStreams(list){
+  return list
+    .map(parseStream)
+    .filter(s => s.url && !/^magnet:/i.test(s.url))  // debrid-resolved only
+    .sort((a,b)=>rank(b)-rank(a));
+}
+
+/* ---------- state ---------- */
+let SHOW = null;      // {id,name,poster,year}
+let EPISODES = [];    // [{season,episode,id,name,state,alts,pick,on}]
+let SEASON = null;
+let RUN = 0;          // cancels stale probe runs
+
+/* ---------- search ---------- */
+async function search(){
+  const q = $("#q").value.trim();
+  if(!q) return;
+  $("#stage").innerHTML = '<div class="empty">Searching…</div>';
+  try{
+    const d = await getJSON(`${CINEMETA}/catalog/series/top/search=${encodeURIComponent(q)}.json`);
+    const metas = (d.metas||[]).slice(0,12);
+    if(!metas.length){ $("#stage").innerHTML = '<div class="empty">No series matched. Try the original-language title.</div>'; return; }
+    $("#stage").innerHTML = '<div class="results"></div>';
+    const grid = $(".results");
+    metas.forEach(m=>{
+      const b = document.createElement("button");
+      b.className = "card";
+      b.innerHTML = `<img alt="" src="${m.poster||""}" loading="lazy"><b></b><span></span>`;
+      b.querySelector("b").textContent = m.name;
+      b.querySelector("span").textContent = m.releaseInfo||"";
+      b.onclick = ()=>openShow(m);
+      grid.appendChild(b);
+    });
+  }catch(e){
+    $("#stage").innerHTML = `<div class="empty err">Search failed — ${e.message}. If this keeps happening, run this page from a real host rather than a preview frame.</div>`;
+  }
+}
+$("#goBtn").onclick = search;
+$("#q").addEventListener("keydown", e => { if(e.key==="Enter") search(); });
+
+/* ---------- open a show ---------- */
+async function openShow(m){
+  $("#stage").innerHTML = '<div class="empty">Loading episodes…</div>';
+  try{
+    const d = await getJSON(`${CINEMETA}/meta/series/${m.id}.json`);
+    const meta = d.meta || {};
+    SHOW = {id:m.id, name:meta.name||m.name, poster:meta.poster||m.poster, year:meta.releaseInfo||m.releaseInfo||""};
+    const vids = (meta.videos||[]).filter(v=>v.season>0 && v.episode>0);
+    const seasons = [...new Set(vids.map(v=>v.season))].sort((a,b)=>a-b);
+    SHOW.vids = vids;
+    SHOW.seasons = seasons;
+    renderShow();
+    if(seasons.length) selectSeason(seasons[0]);
+  }catch(e){
+    $("#stage").innerHTML = `<div class="empty err">Couldn't load that series — ${e.message}</div>`;
+  }
+}
+
+function renderShow(){
+  $("#stage").innerHTML = `
+    <div class="showhead">
+      <img alt="" src="${SHOW.poster||""}">
+      <div>
+        <h1></h1>
+        <p></p>
+      </div>
+    </div>
+    <div class="seasons" id="seasons"></div>
+    <div id="stripWrap"></div>
+    <div id="tblWrap"></div>
+    <div class="note" id="note"></div>
+  `;
+  $(".showhead h1").textContent = SHOW.name;
+  $(".showhead p").textContent = `${SHOW.year} · ${SHOW.id} · ${SHOW.seasons.length} season${SHOW.seasons.length!==1?"s":""}`;
+  const sc = $("#seasons");
+  SHOW.seasons.forEach(s=>{
+    const b=document.createElement("button");
+    b.textContent = "S"+String(s).padStart(2,"0");
+    b.setAttribute("aria-pressed", String(s===SEASON));
+    b.onclick=()=>selectSeason(s);
+    sc.appendChild(b);
+  });
+  $("#note").innerHTML = `<b>Handing off:</b> keep JDownloader open with clipboard monitoring on and hit <b>Copy links</b> — every episode lands in LinkGrabber at once. For aria2, save the input file and run <span class="mono">aria2c -i manifest.txt -x8 -j3</span>.`;
+}
+
+function selectSeason(s){
+  SEASON = s;
+  RUN++;
+  document.querySelectorAll("#seasons button").forEach(b=>{
+    b.setAttribute("aria-pressed", String(b.textContent === "S"+String(s).padStart(2,"0")));
+  });
+  EPISODES = SHOW.vids.filter(v=>v.season===s)
+    .sort((a,b)=>a.episode-b.episode)
+    .map(v=>({season:v.season, episode:v.episode, id:v.id, name:v.name||"", state:"idle", alts:[], pick:null, on:true, open:false}));
+  renderStrip(); renderTable(); updateDock();
+  probeSeason(RUN);
+}
+
+/* ---------- the strip ---------- */
+function renderStrip(){
+  const w = $("#stripWrap");
+  w.innerHTML = '<div class="strip"></div>';
+  const strip = w.querySelector(".strip");
+  EPISODES.forEach((e,i)=>{
+    const d=document.createElement("div");
+    d.className="pip"; d.dataset.state=e.state; d.dataset.off = String(!e.on);
+    d.innerHTML = `<div class="n">E${String(e.episode).padStart(2,"0")}</div><div class="bar"><div class="q"></div></div>`;
+    d.querySelector(".q").textContent = e.pick ? (e.pick.res? e.pick.res==2160?"4K":e.pick.res+"p" : "•") : "";
+    d.title = e.pick ? e.pick.label : "";
+    d.onclick = ()=>{ if(e.pick){ e.on=!e.on; syncOne(i); updateDock(); } };
+    strip.appendChild(d);
+  });
+}
+function syncOne(i){
+  const e = EPISODES[i];
+  const pip = document.querySelectorAll(".pip")[i];
+  if(pip){
+    pip.dataset.state = e.state; pip.dataset.off = String(!e.on);
+    pip.querySelector(".q").textContent = e.pick ? (e.pick.res? (e.pick.res==2160?"4K":e.pick.res+"p") : "•") : "";
+    pip.title = e.pick ? e.pick.label : "";
+  }
+  const box = document.querySelector(`.ep[data-i="${i}"] input[type=checkbox]`);
+  if(box) box.checked = e.on;
+}
+
+/* ---------- probing with bounded concurrency ---------- */
+async function probeSeason(run){
+  if(!cfg.addon){
+    $("#tblWrap").innerHTML = '<div class="empty">Add your addon URL in settings first.</div>';
+    return;
+  }
+  const b = base(cfg.addon);
+  const queue = EPISODES.map((_,i)=>i);
+  const workers = Array.from({length:4}, async ()=>{
+    while(queue.length){
+      if(run !== RUN) return;
+      const i = queue.shift();
+      const e = EPISODES[i];
+      e.state = "probing"; syncOne(i);
+      try{
+        const d = await getJSON(`${b}/stream/series/${encodeURIComponent(e.id)}.json`, true);
+        if(run !== RUN) return;
+        const picks = pickStreams(d.streams||[]);
+        e.alts = picks.slice(0,8);
+        e.pick = picks[0] || null;
+        e.state = e.pick ? "found" : "none";
+        e.on = !!e.pick;
+      }catch(err){
+        e.state = "none"; e.on = false; e.err = err.message;
+      }
+      if(run !== RUN) return;
+      syncOne(i); renderRow(i); updateDock();
+    }
+  });
+  await Promise.all(workers);
+}
+
+/* ---------- table ---------- */
+function renderTable(){
+  const w = $("#tblWrap");
+  w.innerHTML = '<div class="tbl"></div>';
+  const t = w.querySelector(".tbl");
+  EPISODES.forEach((e,i)=>{
+    const row=document.createElement("div");
+    row.className="ep"; row.dataset.i=i;
+    t.appendChild(row);
+    const holder=document.createElement("div");
+    holder.dataset.alts=i;
+    t.appendChild(holder);
+    renderRow(i);
+  });
+}
+
+function renderRow(i){
+  const e = EPISODES[i];
+  const row = document.querySelector(`.ep[data-i="${i}"]`);
+  if(!row) return;
+  row.className = "ep" + (e.pick ? "" : " miss");
+  row.innerHTML = "";
+
+  const cb=document.createElement("input");
+  cb.type="checkbox"; cb.checked=e.on; cb.disabled=!e.pick;
+  cb.setAttribute("aria-label",`Include episode ${e.episode}`);
+  cb.onchange=()=>{ e.on=cb.checked; syncOne(i); updateDock(); };
+  row.appendChild(cb);
+
+  const code=document.createElement("div");
+  code.className="code";
+  code.textContent = `S${String(e.season).padStart(2,"0")}E${String(e.episode).padStart(2,"0")}`;
+  row.appendChild(code);
+
+  const body=document.createElement("div");
+  body.className="body";
+  const ttl=document.createElement("div");
+  ttl.className="title"; ttl.textContent = e.name || `Episode ${e.episode}`;
+  body.appendChild(ttl);
+
+  if(e.state==="probing"){
+    const f=document.createElement("div"); f.className="file"; f.textContent="probing sources…"; body.appendChild(f);
+  } else if(e.pick){
+    const f=document.createElement("div"); f.className="file";
+    f.textContent = e.pick.file || e.pick.label;
+    body.appendChild(f);
+    const meta=document.createElement("div"); meta.className="meta";
+    if(e.pick.res) meta.appendChild(chip(e.pick.res===2160?"4K":e.pick.res+"p", true));
+    if(e.pick.gb) meta.appendChild(chip(e.pick.gb.toFixed(2)+" GB"));
+    if(e.pick.cached) meta.appendChild(chip("cached"));
+    if(e.alts.length>1){
+      const sw=document.createElement("button");
+      sw.className="swap"; sw.textContent = e.open ? "hide alternatives" : `${e.alts.length-1} other source${e.alts.length>2?"s":""}`;
+      sw.onclick=()=>{ e.open=!e.open; renderRow(i); renderAlts(i); };
+      meta.appendChild(sw);
+    }
+    body.appendChild(meta);
+  } else if(e.state==="none"){
+    const f=document.createElement("div"); f.className="file err";
+    f.textContent = e.err ? `no result — ${e.err}` : "no debrid-ready source found";
+    body.appendChild(f);
+  }
+  row.appendChild(body);
+  renderAlts(i);
+}
+
+function chip(txt, v){
+  const c=document.createElement("span"); c.className="chip"+(v?" v":""); c.textContent=txt; return c;
+}
+
+function renderAlts(i){
+  const e = EPISODES[i];
+  const h = document.querySelector(`[data-alts="${i}"]`);
+  if(!h) return;
+  h.innerHTML = "";
+  if(!e.open || e.alts.length<2) return;
+  h.className="alts";
+  e.alts.forEach(a=>{
+    const b=document.createElement("button");
+    b.className="alt";
+    b.textContent = `${a.res?(a.res===2160?"4K":a.res+"p"):"?"} · ${a.gb?a.gb.toFixed(2)+"GB":"?"} · ${a.file || a.label}`;
+    b.onclick=()=>{ e.pick=a; e.on=true; e.open=false; syncOne(i); renderRow(i); updateDock(); };
+    h.appendChild(b);
+  });
+}
+
+/* ---------- dock + exports ---------- */
+function selected(){ return EPISODES.filter(e=>e.on && e.pick); }
+
+function updateDock(){
+  const s = selected();
+  const gb = s.reduce((a,e)=>a+(e.pick.gb||0),0);
+  $("#count").innerHTML = s.length
+    ? `<b>${s.length}</b> episode${s.length!==1?"s":""} queued${gb?` · <b>${gb.toFixed(1)} GB</b>`:""}`
+    : "";
+  $("#dock").classList.toggle("up", s.length>0);
+}
+
+function fileName(e){
+  if(e.pick.file) return e.pick.file;
+  const safe = (SHOW.name||"Series").replace(/[\\/:*?"<>|]/g,"");
+  return `${safe}.S${String(e.season).padStart(2,"0")}E${String(e.episode).padStart(2,"0")}.mkv`;
+}
+
+$("#btnCopy").onclick = async ()=>{
+  const txt = selected().map(e=>e.pick.url).join("\n");
+  try{
+    await navigator.clipboard.writeText(txt);
+    toast(`${selected().length} links copied`);
+  }catch(err){
+    const ta=document.createElement("textarea");
+    ta.value=txt; document.body.appendChild(ta); ta.select();
+    document.execCommand("copy"); ta.remove(); toast("Links copied");
+  }
+};
+
+function save(name, text){
+  const b=new Blob([text],{type:"text/plain"});
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(b); a.download=name;
+  document.body.appendChild(a); a.click();
+  setTimeout(()=>{URL.revokeObjectURL(a.href); a.remove();},500);
+}
+
+$("#btnTxt").onclick = ()=>{
+  save(`${(SHOW.name||"manifest").replace(/\s+/g,".")}.S${String(SEASON).padStart(2,"0")}.txt`,
+       selected().map(e=>e.pick.url).join("\n"));
+  toast("Saved");
+};
+
+$("#btnAria").onclick = ()=>{
+  // aria2 input-file format: URL on one line, indented options beneath
+  const body = selected().map(e=>`${e.pick.url}\n  out=${fileName(e)}`).join("\n");
+  save(`${(SHOW.name||"manifest").replace(/\s+/g,".")}.S${String(SEASON).padStart(2,"0")}.aria2.txt`, body);
+  toast("Run: aria2c -i <file> -x8 -j3");
+};
+</script>
+</body>
+</html>
