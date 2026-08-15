@@ -148,6 +148,19 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
 .tool:hover:not(:disabled){border-color:var(--violet);color:var(--ink)}
 .tool:disabled{opacity:.4;cursor:default}
 .tnote{font-family:"JetBrains Mono",monospace;font-size:11.5px;color:var(--amber)}
+.srcnote{font-family:"JetBrains Mono",monospace;font-size:11.5px;color:var(--ink-faint);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.srcs{margin-top:10px;padding:10px;background:var(--panel);border:1px solid var(--rule);border-radius:4px}
+.src{
+  display:block;width:100%;text-align:left;margin-bottom:5px;padding:7px 9px;
+  border:1px solid var(--rule);border-radius:2px;
+  font-family:"JetBrains Mono",monospace;font-size:11.5px;color:var(--ink-dim);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.src:last-child{margin-bottom:0}
+.src:hover{border-color:var(--violet);color:var(--ink)}
+.src.on{border-color:var(--violet);background:var(--panel-2);color:var(--ink)}
+.cov{display:inline-block;min-width:44px;color:var(--ink-faint)}
+.cov.full{color:var(--ok)}
 .tbl{margin-top:14px;border:1px solid var(--rule);border-radius:4px;overflow:hidden}
 .ep{
   display:flex;gap:11px;align-items:flex-start;
@@ -217,11 +230,19 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
 </header>
 
 <div id="config">
+  <div class="row">
+    <div class="field">
+      <label for="provider">Debrid provider</label>
+      <select id="provider"></select>
+    </div>
+    <div class="field" style="flex:2">
+      <label for="apikey">API key</label>
+      <input type="text" id="apikey" placeholder="paste your API key" spellcheck="false" autocomplete="off">
+    </div>
+  </div>
   <div class="field">
-    <label for="addon">Stremio addon URL (debrid-enabled)</label>
-    <input type="text" id="addon" placeholder="https://torrentio.strem.fun/realdebrid=YOURKEY|sort=qualitysize/manifest.json" spellcheck="false">
-    <a class="ext" href="https://real-debrid.com/apitoken" target="_blank" rel="noopener noreferrer">Find API Key</a>
-    <div class="hint">Paste the same configured URL you installed in Stremio — Torrentio, AIOStreams, Comet, MediaFusion. Anything after <span class="mono">/manifest.json</span> is trimmed automatically. Your key stays in this browser.</div>
+    <a class="ext" id="keyLink" href="https://real-debrid.com/apitoken" target="_blank" rel="noopener noreferrer">Find API Key</a>
+    <div class="hint">Your key stays in this browser and is only used to build the Torrentio addon URL. Pasting a full addon URL works too — the provider and key are read out of it.</div>
   </div>
   <div class="row">
     <div class="field">
@@ -277,12 +298,37 @@ const store = {
 const CINEMETA = "https://v3-cinemeta.strem.io";
 const $ = s => document.querySelector(s);
 
+const TORRENTIO = "https://torrentio.strem.fun";
+
+// Torrentio's option name for each service, with the page that issues the key.
+// Both come from Torrentio's own /configure page.
+const PROVIDERS = [
+  {id:"realdebrid", name:"Real-Debrid",  key:"https://real-debrid.com/apitoken"},
+  {id:"alldebrid",  name:"AllDebrid",    key:"https://alldebrid.com/apikeys"},
+  {id:"premiumize", name:"Premiumize",   key:"https://www.premiumize.me/account"},
+  {id:"debridlink", name:"Debrid-Link",  key:"https://debrid-link.fr/webapp/apikey"},
+  {id:"torbox",     name:"TorBox",       key:"https://torbox.app/settings"},
+  {id:"offcloud",   name:"Offcloud",     key:"https://offcloud.com/#/account"}
+];
+const providerOf = id => PROVIDERS.find(p=>p.id===id) || PROVIDERS[0];
+
 const cfg = {
-  get addon(){ return (store.get("mf.addon")||"").trim(); },
+  get provider(){ return providerOf(store.get("mf.provider")||"realdebrid").id; },
+  get apikey(){ return (store.get("mf.apikey")||"").trim(); },
+  // the addon URL is derived, not stored
+  get addon(){ return this.apikey ? `${TORRENTIO}/${this.provider}=${encodeURIComponent(this.apikey)}/manifest.json` : ""; },
   get proxy(){ return (store.get("mf.proxy")||"").trim(); },
   get pref(){ return store.get("mf.pref")||"1080"; },
   get maxgb(){ return parseFloat(store.get("mf.maxgb")||"6")||0; }
 };
+
+// Accept a pasted addon URL in the key box: pull the provider and key back out
+// so an existing Stremio URL keeps working.
+function readAddonURL(text){
+  const m = String(text).match(/\b(realdebrid|alldebrid|premiumize|debridlink|torbox|offcloud|easydebrid)\s*=\s*([^|/\s]+)/i);
+  if(!m) return null;
+  return {provider:m[1].toLowerCase(), apikey:decodeURIComponent(m[2])};
+}
 
 function base(url){
   return url.replace(/\/manifest\.json.*$/i,"").replace(/\/+$/,"");
@@ -324,7 +370,47 @@ function toast(msg){
 }
 
 /* ---------- config wiring ---------- */
-["addon","proxy","maxgb"].forEach(id=>{
+// migrate the older "paste the whole addon URL" setting
+(function migrate(){
+  const old = store.get("mf.addon");
+  if(old && !store.get("mf.apikey")){
+    const got = readAddonURL(old);
+    if(got){ store.set("mf.provider", got.provider); store.set("mf.apikey", got.apikey); }
+  }
+})();
+
+PROVIDERS.forEach(p=>{
+  const o=document.createElement("option");
+  o.value=p.id; o.textContent=p.name;
+  $("#provider").appendChild(o);
+});
+
+function syncProvider(){
+  const p = providerOf(cfg.provider);
+  $("#provider").value = p.id;
+  $("#keyLink").href = p.key;
+  $("#keyLink").textContent = `Find ${p.name} API Key`;
+}
+
+$("#provider").addEventListener("change", e=>{ store.set("mf.provider", e.target.value); syncProvider(); });
+
+$("#apikey").value = cfg.apikey;
+$("#apikey").addEventListener("input", e=>{
+  // a pasted addon URL carries its own provider — honour it
+  const got = readAddonURL(e.target.value);
+  if(got){
+    store.set("mf.provider", got.provider);
+    store.set("mf.apikey", got.apikey);
+    e.target.value = got.apikey;
+    syncProvider();
+    toast(`${providerOf(got.provider).name} key read from that URL`);
+  }else{
+    store.set("mf.apikey", e.target.value.trim());
+  }
+});
+syncProvider();
+
+["proxy","maxgb"].forEach(id=>{
   const el=$("#"+id); el.value = store.get("mf."+id)||el.value||"";
   el.addEventListener("input",()=>store.set("mf."+id, el.value));
 });
@@ -401,7 +487,20 @@ function parseStream(s){
   if(/download|queued|⏳/i.test(name)) cached = false;
   else if(/\+\]|⚡|instant|cached/i.test(name)) cached = true;
 
-  return {raw:s, url:s.url, res, gb, seeders, file, cached, label: blob.replace(/\s+/g," ").trim().slice(0,150)};
+  // Which torrent this came from. bingeGroup is the addon's own "same release"
+  // marker (Stremio uses it to keep playing from one source); the infohash in
+  // the resolve URL is the fallback for addons that don't send one.
+  let group = (hints.bingeGroup || "").trim();
+  if(!group && s.url){
+    const hash = (s.url.match(/\b([a-f0-9]{40})\b/i)||[])[1];
+    if(hash) group = "hash|"+hash.toLowerCase();
+  }
+
+  // the release/torrent name, for labelling a source
+  const release = (detail.split("\n")[0] || file || "").trim();
+
+  return {raw:s, url:s.url, res, gb, seeders, file, cached, group: group||null, release,
+          label: blob.replace(/\s+/g," ").trim().slice(0,150)};
 }
 
 // An uncached link doesn't 302 to the file — it redirects to a placeholder mp4
@@ -436,6 +535,8 @@ let EPISODES = [];    // [{season,episode,id,name,state,alts,pick,on}]
 let SEASON = null;
 let RUN = 0;          // cancels stale probe runs
 let ABORT = null;     // ...and drops their in-flight requests
+let SOURCE = null;    // bingeGroup pinned across the whole season
+let SRCOPEN = false;
 
 function cancelProbes(){
   if(ABORT) ABORT.abort();
@@ -501,12 +602,16 @@ function renderShow(){
     <div id="stripWrap"></div>
     <div class="tools" id="tools">
       <button class="tool" id="btnAll">select all</button>
+      <button class="tool" id="btnSrc">one source for all…</button>
       <span class="tnote" id="tnote"></span>
+      <span class="srcnote" id="srcnote"></span>
     </div>
+    <div id="srcPanel"></div>
     <div id="tblWrap"></div>
     <div class="note" id="note"></div>
   `;
   $("#btnAll").onclick = toggleAll;
+  $("#btnSrc").onclick = ()=>{ SRCOPEN = !SRCOPEN; renderSources(); };
   $(".showhead h1").textContent = SHOW.name;
   $(".showhead p").textContent = `${SHOW.year} · ${SHOW.id} · ${SHOW.seasons.length} season${SHOW.seasons.length!==1?"s":""}`;
   const sc = $("#seasons");
@@ -527,10 +632,11 @@ function selectSeason(s){
   document.querySelectorAll("#seasons button").forEach(b=>{
     b.setAttribute("aria-pressed", String(b.textContent === "S"+String(s).padStart(2,"0")));
   });
+  SOURCE = null; SRCOPEN = false;   // sources are per-season
   EPISODES = SHOW.vids.filter(v=>v.season===s)
     .sort((a,b)=>a.episode-b.episode)
-    .map(v=>({season:v.season, episode:v.episode, id:v.id, name:v.name||"", state:"idle", alts:[], pick:null, on:true, open:false}));
-  renderStrip(); renderTable(); updateDock();
+    .map(v=>({season:v.season, episode:v.episode, id:v.id, name:v.name||"", state:"idle", all:[], alts:[], pick:null, on:true, open:false, fromSource:false}));
+  renderStrip(); renderTable(); renderSources(); updateDock();
   probeSeason(RUN);
 }
 
@@ -564,7 +670,7 @@ function syncOne(i){
 /* ---------- probing with bounded concurrency ---------- */
 async function probeSeason(run){
   if(!cfg.addon){
-    $("#tblWrap").innerHTML = '<div class="empty">Add your addon URL in settings first.</div>';
+    $("#tblWrap").innerHTML = '<div class="empty">Add your debrid API key in settings first.</div>';
     return;
   }
   const b = base(cfg.addon);
@@ -581,6 +687,7 @@ async function probeSeason(run){
         const d = await getJSONRetry(`${b}/stream/series/${encodeURIComponent(e.id)}.json`, true, ctrl.signal);
         if(run !== RUN) return;
         const picks = pickStreams(d.streams||[]);
+        e.all = picks;                    // full list — a season pack may miss the top 8
         e.alts = picks.slice(0,8);
         e.pick = picks[0] || null;
         e.state = e.pick ? "found" : "none";
@@ -592,10 +699,11 @@ async function probeSeason(run){
         e.err = err.name === "TypeError" ? "addon didn't respond, click the season to retry" : err.message;
       }
       if(run !== RUN) return;
-      syncOne(i); renderRow(i); updateDock();
+      syncOne(i); renderRow(i); renderSources(); updateDock();
     }
   });
   await Promise.all(workers);
+  if(run === RUN) renderSources();
 }
 
 /* ---------- table ---------- */
@@ -655,6 +763,7 @@ function renderRow(i){
     if(e.pick.seeders) meta.appendChild(chip(e.pick.seeders+" seed"+(e.pick.seeders!==1?"s":"")));
     if(e.pick.cached === true) meta.appendChild(chip("cached"));
     else if(e.pick.cached === false) meta.appendChild(chip("not cached", false, true));
+    if(SOURCE && !e.fromSource) meta.appendChild(chip("other source", false, true));
     if(e.alts.length>1){
       const sw=document.createElement("button");
       sw.className="swap"; sw.textContent = e.open ? "hide alternatives" : `${e.alts.length-1} other source${e.alts.length>2?"s":""}`;
@@ -689,6 +798,101 @@ function renderAlts(i){
     if(a.cached===false) b.title = "Not cached yet — this link serves a placeholder until Real-Debrid finishes downloading it.";
     b.onclick=()=>{ e.pick=a; e.on=true; e.open=false; syncOne(i); renderRow(i); updateDock(); };
     h.appendChild(b);
+  });
+}
+
+/* ---------- one source across the whole season ---------- */
+// Season packs show up as one torrent serving every episode, so grouping each
+// episode's streams by release gives a list of sources that cover the season.
+function sourceList(){
+  const map = new Map();
+  EPISODES.forEach((e,i)=>{
+    (e.all||[]).forEach(a=>{
+      if(!a.group) return;
+      let g = map.get(a.group);
+      if(!g){
+        g = {key:a.group, eps:new Map(), seeders:a.seeders, cached:a.cached, release:a.release, res:a.res};
+        map.set(a.group, g);
+      }
+      if(!g.eps.has(i)) g.eps.set(i, a);      // first hit is the best-ranked stream for that episode
+    });
+  });
+  return [...map.values()]
+    .map(g=>{
+      const picks = [...g.eps.values()];
+      g.count = picks.length;
+      g.gb = picks.reduce((t,x)=>t+(x.gb||0),0) / picks.length;
+      g.res = picks[0].res;
+      return g;
+    })
+    .filter(g=>g.count > 1)                    // a source for one episode isn't a "source for all"
+    .sort((a,b)=> b.count-a.count || tier(b)-tier(a) || b.seeders-a.seeders);
+}
+
+function applySource(key){
+  const g = sourceList().find(x=>x.key===key);
+  if(!g) return;
+  SOURCE = key;
+  EPISODES.forEach((e,i)=>{
+    const a = g.eps.get(i);
+    e.fromSource = !!a;
+    if(a){ e.pick = a; e.on = a.cached !== false; }
+  });
+  SRCOPEN = false;
+  renderStrip(); renderTable(); renderSources(); updateDock();
+  const missing = EPISODES.filter(e=>e.pick && !e.fromSource).length;
+  toast(missing ? `${g.count} of ${EPISODES.length} from this source · ${missing} kept their own`
+                : `all ${g.count} episodes from this source`);
+}
+
+function clearSource(){
+  SOURCE = null;
+  EPISODES.forEach(e=>{
+    e.fromSource = false;
+    if(e.all && e.all.length){ e.pick = e.all[0]; e.on = e.pick.cached !== false; }
+  });
+  SRCOPEN = false;
+  renderStrip(); renderTable(); renderSources(); updateDock();
+  toast("back to best per episode");
+}
+
+function renderSources(){
+  const bar = $("#srcnote"), panel = $("#srcPanel"), btn = $("#btnSrc");
+  if(!bar || !panel || !btn) return;
+  const ready = EPISODES.some(e=>e.all && e.all.length);
+  btn.disabled = !ready;
+  btn.textContent = SRCOPEN ? "hide sources" : "one source for all…";
+
+  if(SOURCE){
+    const g = sourceList().find(x=>x.key===SOURCE);
+    bar.textContent = g ? `${g.count}/${EPISODES.length} from ${g.release.slice(0,54)}` : "";
+  } else bar.textContent = "";
+
+  panel.innerHTML = "";
+  if(!SRCOPEN) return;
+  panel.className = "srcs";
+  const list = sourceList().slice(0,14);
+  if(!list.length){ panel.innerHTML = '<div class="empty">No source covers more than one episode.</div>'; return; }
+
+  const auto = document.createElement("button");
+  auto.className = "src" + (SOURCE ? "" : " on");
+  auto.textContent = "↺ best per episode (automatic)";
+  auto.onclick = clearSource;
+  panel.appendChild(auto);
+
+  list.forEach(g=>{
+    const b = document.createElement("button");
+    b.className = "src" + (g.key===SOURCE ? " on" : "");
+    const cov = document.createElement("span");
+    cov.className = "cov" + (g.count===EPISODES.length ? " full" : "");
+    cov.textContent = `${g.count}/${EPISODES.length}`;
+    b.appendChild(cov);
+    const txt = document.createElement("span");
+    txt.textContent = ` ${g.cached===true?"⚡":g.cached===false?"⏳":"·"} ${g.seeders} seeds · ${g.res?(g.res===2160?"4K":g.res+"p"):"?"} · ~${g.gb.toFixed(2)}GB/ep · ${g.release}`;
+    b.appendChild(txt);
+    if(g.cached===false) b.title = "Not cached — these links serve a placeholder until Real-Debrid pulls the torrent.";
+    b.onclick = ()=>applySource(g.key);
+    panel.appendChild(b);
   });
 }
 

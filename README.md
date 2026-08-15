@@ -9,24 +9,32 @@ the browser.
 
 ## Setup
 
-Open the site, hit **settings**, and paste the configured addon URL you already use
-in Stremio — for example:
+Open the site, hit **settings**, pick your debrid provider, and paste its API key.
+The **Find … API Key** link goes straight to that provider's key page. Supported:
+Real-Debrid (default), AllDebrid, Premiumize, Debrid-Link, TorBox, and Offcloud.
 
-```
-https://torrentio.strem.fun/realdebrid=<your-api-token>/manifest.json
-```
-
-Your Real-Debrid token lives in that URL, so it is kept in the browser's
-`localStorage` and never leaves the page. Nothing is committed to this repo, and
-there is no server side.
+The key is kept in the browser's `localStorage` and is only used to build the
+Torrentio addon URL. Nothing is committed to this repo, and there is no server
+side. Pasting a full Stremio addon URL into the key box also works — the provider
+and key are read back out of it.
 
 ## How sources are chosen
 
-- Sources Real-Debrid has already cached rank above uncached ones. An uncached
-  link doesn't return the episode — it redirects to a placeholder video until the
-  debrid service finishes pulling the torrent — so those are never auto-selected.
+- Sources the debrid service has already cached rank above uncached ones. An
+  uncached link doesn't return the episode — it redirects to a placeholder video
+  until the service finishes pulling the torrent — so those are never
+  auto-selected.
 - Within that, the source with the most seeders wins.
 - **Prefer** and **Max size** only break ties between equally-seeded torrents.
+
+## One source for a whole season
+
+Episodes are matched to their torrent via the addon's `bingeGroup`, so
+**one source for all…** lists the releases that cover the season — usually season
+packs — with how many episodes each one covers, its seeders, quality, and average
+size per episode. Picking one switches every episode to that release; anything it
+doesn't cover keeps its own best source and is marked. **best per episode** puts
+it back.
 
 ## Deploying
 
