@@ -88,6 +88,8 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
 .go:disabled{background:var(--panel-2);color:var(--ink-faint);cursor:default}
 
 .results{display:grid;grid-template-columns:repeat(auto-fill,minmax(108px,1fr));gap:12px;margin-top:18px}
+.rlabel{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-dim);margin-top:22px}
+.rlabel + .results{margin-top:10px}
 .card{text-align:left;border-radius:3px;overflow:hidden}
 .card img{width:100%;aspect-ratio:2/3;object-fit:cover;display:block;background:var(--panel-2);border:1px solid var(--rule);border-radius:3px}
 .card:hover img{border-color:var(--violet)}
@@ -215,6 +217,30 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
 .note b{color:var(--ink)}
 .empty{padding:40px 0;text-align:center;color:var(--ink-faint);font-size:14px}
 .err{color:var(--bad)}
+/* ---- download queue ---- */
+.queue{
+  position:fixed;right:16px;bottom:64px;width:352px;max-width:calc(100vw - 32px);
+  max-height:54vh;overflow:auto;z-index:5;
+  background:var(--panel);border:1px solid var(--rule);border-radius:4px;
+  box-shadow:0 8px 28px rgba(0,0,0,.45);
+}
+.qhead{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--rule);position:sticky;top:0;background:var(--panel)}
+.qhead b{font-size:13px}
+.qcount{font-family:"JetBrains Mono",monospace;font-size:11.5px;color:var(--ink-faint);margin-right:auto}
+.qmode{padding:7px 12px;font-size:11.5px;color:var(--ink-faint);border-bottom:1px solid var(--rule);line-height:1.4}
+.qrow{display:flex;align-items:center;gap:7px;padding:6px 12px;font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--ink-faint);flex-wrap:wrap}
+.qrow.cur{background:var(--panel-2);color:var(--ink)}
+.qm{width:10px;text-align:center}
+.qe{color:var(--ink-dim);flex:0 0 auto}
+.qn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.qp{flex:0 0 auto;color:var(--violet)}
+.qbar{flex:0 0 100%;height:2px;background:var(--rule);border-radius:1px;overflow:hidden}
+.qbar div{height:100%;background:var(--violet)}
+.qfoot{display:flex;gap:7px;justify-content:flex-end;padding:9px 12px;border-top:1px solid var(--rule);position:sticky;bottom:0;background:var(--panel)}
+.qbtn{padding:5px 11px;border:1px solid var(--rule);border-radius:2px;font-size:12px;color:var(--ink-dim)}
+.qbtn:hover{border-color:var(--violet);color:var(--ink)}
+.qbtn.pri{background:var(--violet);border-color:var(--violet);color:#fff}
+.qbtn.pri:hover{background:#8E71FF}
 .toast{position:fixed;bottom:74px;left:50%;transform:translateX(-50%) translateY(20px);opacity:0;background:var(--panel-2);border:1px solid var(--violet);border-radius:3px;padding:9px 16px;font-size:13px;transition:.2s;pointer-events:none}
 .toast.show{opacity:1;transform:translateX(-50%)}
 </style>
@@ -271,6 +297,8 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
   <input type="text" id="q" placeholder="Search a series…" spellcheck="false">
   <button class="go" id="goBtn">Search</button>
 </div>
+
+<div id="recent"></div>
 
 <div id="stage"></div>
 
@@ -543,41 +571,84 @@ function cancelProbes(){
   ABORT = null;
 }
 
+/* ---------- series cards (search results and recents share this) ---------- */
+function showCard(m){
+  const b = document.createElement("button");
+  b.className = "card";
+  const img = document.createElement("img");
+  img.alt = ""; img.loading = "lazy";
+  if(m.poster) img.src = m.poster;
+  const name = document.createElement("b");
+  name.textContent = m.name || "";
+  const sub = document.createElement("span");
+  sub.textContent = m.releaseInfo || "";
+  b.append(img, name, sub);
+  b.onclick = ()=>openShow(m);
+  return b;
+}
+
+/* ---------- recently opened ---------- */
+const RECENT_MAX = 12;
+
+function recents(){
+  try{
+    const a = JSON.parse(store.get("mf.recent") || "[]");
+    return Array.isArray(a) ? a : [];
+  }catch(err){ return []; }
+}
+
+// only called once a series is actually opened, not merely searched
+function rememberShow(m){
+  if(!m || !m.id) return;
+  const entry = {id:m.id, name:m.name||"", poster:m.poster||"", releaseInfo:m.releaseInfo||""};
+  const list = [entry, ...recents().filter(x=>x.id !== entry.id)].slice(0, RECENT_MAX);
+  store.set("mf.recent", JSON.stringify(list));
+  renderRecent();
+}
+
+function renderRecent(){
+  const wrap = $("#recent");
+  if(!wrap) return;
+  const list = recents();
+  // the area under the search shows results or a show when there is one
+  if(!list.length || $("#stage").children.length){ wrap.innerHTML = ""; return; }
+  wrap.innerHTML = '<div class="rlabel">Recently opened</div><div class="results"></div>';
+  const grid = wrap.querySelector(".results");
+  list.forEach(m => grid.appendChild(showCard(m)));
+}
+
 /* ---------- search ---------- */
 async function search(){
   const q = $("#q").value.trim();
   if(!q) return;
   RUN++; cancelProbes();   // leaving the show: stop probing it
   $("#stage").innerHTML = '<div class="empty">Searching…</div>';
+  renderRecent();
   try{
     const d = await getJSON(`${CINEMETA}/catalog/series/top/search=${encodeURIComponent(q)}.json`);
     const metas = (d.metas||[]).slice(0,12);
     if(!metas.length){ $("#stage").innerHTML = '<div class="empty">No series matched. Try the original-language title.</div>'; return; }
     $("#stage").innerHTML = '<div class="results"></div>';
-    const grid = $(".results");
-    metas.forEach(m=>{
-      const b = document.createElement("button");
-      b.className = "card";
-      b.innerHTML = `<img alt="" src="${m.poster||""}" loading="lazy"><b></b><span></span>`;
-      b.querySelector("b").textContent = m.name;
-      b.querySelector("span").textContent = m.releaseInfo||"";
-      b.onclick = ()=>openShow(m);
-      grid.appendChild(b);
-    });
+    const grid = $("#stage .results");
+    metas.forEach(m=>grid.appendChild(showCard(m)));
   }catch(e){
     $("#stage").innerHTML = `<div class="empty err">Search failed — ${e.message}. If this keeps happening, run this page from a real host rather than a preview frame.</div>`;
   }
 }
 $("#goBtn").onclick = search;
 $("#q").addEventListener("keydown", e => { if(e.key==="Enter") search(); });
+renderRecent();   // the markup above this script is already parsed
 
 /* ---------- open a show ---------- */
 async function openShow(m){
   $("#stage").innerHTML = '<div class="empty">Loading episodes…</div>';
+  renderRecent();
   try{
     const d = await getJSON(`${CINEMETA}/meta/series/${m.id}.json`);
     const meta = d.meta || {};
     SHOW = {id:m.id, name:meta.name||m.name, poster:meta.poster||m.poster, year:meta.releaseInfo||m.releaseInfo||""};
+    // opened, not just searched — and meta gives a better poster/title than the card did
+    rememberShow({id:SHOW.id, name:SHOW.name, poster:SHOW.poster, releaseInfo:SHOW.year});
     const vids = (meta.videos||[]).filter(v=>v.season>0 && v.episode>0);
     const seasons = [...new Set(vids.map(v=>v.season))].sort((a,b)=>a-b);
     SHOW.vids = vids;
@@ -622,7 +693,7 @@ function renderShow(){
     b.onclick=()=>selectSeason(s);
     sc.appendChild(b);
   });
-  $("#note").innerHTML = `<b>Handing off:</b> keep JDownloader open with clipboard monitoring on and hit <b>Copy links</b> — every episode lands in LinkGrabber at once. For aria2, save the input file and run <span class="mono">aria2c -i manifest.txt -x8 -j3</span>. <b>Download</b> pulls them straight through the browser instead — fine for a few episodes, though JDownloader and aria2 handle resume and queueing better.<br><b>Not cached:</b> episodes whose only sources are marked <span class="mono">⏳</span> stay unchecked — those links return a placeholder file, not the episode, until Real-Debrid has pulled the torrent. Play one in Stremio to start that, then re-pick the season.`;
+  $("#note").innerHTML = `<b>Handing off:</b> keep JDownloader open with clipboard monitoring on and hit <b>Copy links</b> — every episode lands in LinkGrabber at once. For aria2, save the input file and run <span class="mono">aria2c -i manifest.txt -x8 -j1</span> — <span class="mono">-j1</span> keeps it to one file at a time.<br><b>Download</b> runs them through the browser one at a time, oldest episode first. Chrome won't tell a page when a download finishes, so it watches the folder you point it at and starts the next when the previous one lands; if you skip the folder prompt, hit <b>next</b> yourself as each finishes.<br><b>Not cached:</b> episodes whose only sources are marked <span class="mono">⏳</span> stay unchecked — those links return a placeholder file, not the episode, until Real-Debrid has pulled the torrent. Play one in Stremio to start that, then re-pick the season.`;
 }
 
 function selectSeason(s){
@@ -968,27 +1039,232 @@ $("#btnTxt").onclick = ()=>{
   toast("Saved");
 };
 
-$("#btnDl").onclick = async (ev)=>{
-  const eps = selected();
-  if(!eps.length) return;
-  const btn = ev.currentTarget;
-  btn.disabled = true;
-  toast(`Starting ${eps.length} download${eps.length!==1?"s":""} — allow multiple files if the browser asks`);
-  // Real-Debrid serves the file with Content-Disposition: attachment, so a plain
-  // anchor click downloads it instead of navigating this page away. The download
-  // attribute is ignored cross-origin — the CDN URL already ends in the filename.
-  for(const e of eps){
-    const a = document.createElement("a");
-    a.href = e.pick.url;
-    a.download = fileName(e);
-    a.rel = "noopener";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    await new Promise(r=>setTimeout(r, 800));
-  }
-  btn.disabled = false;
+/* ---------- download queue ----------
+   The debrid CDN sends no CORS headers, so this page can't fetch the bytes
+   itself — downloads have to be handed to the browser, which never reports back
+   when one finishes. The only way to see completion is to watch the folder the
+   browser saves into: it writes "<name>.crdownload" while transferring and
+   renames it when done. That needs the File System Access API (Chrome/Edge over
+   https). Without it the queue advances on a click instead.               */
+const Q = {
+  items: [],       // {e, name, state, got, total, started, before, seen}
+  i: -1,
+  active: false,
+  dir: null,       // watched FileSystemDirectoryHandle
+  timer: null,
+  list: null       // swappable for testing
 };
+
+function qName(e){ return fileName(e); }
+
+// Chrome dedupes "X.mkv" to "X (1).mkv" when the name is taken
+function qMatches(name, target){
+  const dot = target.lastIndexOf(".");
+  const base = dot > 0 ? target.slice(0,dot) : target;
+  const ext  = dot > 0 ? target.slice(dot) : "";
+  const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^${esc(base)}(?: \\(\\d+\\))?${esc(ext)}$`, "i").test(name);
+}
+
+// One listing of the watched folder. Detection is deliberately name-agnostic
+// for the in-progress file: Chrome usually calls it "Unconfirmed 123456.crdownload",
+// not "<filename>.crdownload", so matching on our own name never fires. Instead
+// each item snapshots the folder before it starts, and anything NEW is ours —
+// which also avoids depending on file timestamps, since a saved file can carry
+// the server's Last-Modified rather than the time it landed.
+async function qListDir(){
+  const names = new Set();
+  const sizes = new Map();
+  for await (const [name, handle] of Q.dir.entries()){
+    if(handle.kind !== "file") continue;
+    names.add(name);
+    if(/\.(crdownload|part|download|tmp)$/i.test(name)){
+      try{ sizes.set(name, (await handle.getFile()).size); }catch(err){}
+    }
+  }
+  return {names, sizes};
+}
+
+function qTrigger(item){
+  // Content-Disposition: attachment means this downloads instead of navigating
+  const a = document.createElement("a");
+  a.href = item.e.pick.url;
+  a.download = item.name;
+  a.rel = "noopener";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+async function startQueue(){
+  const eps = selected().slice().sort((a,b)=> a.season-b.season || a.episode-b.episode);
+  if(!eps.length) return;
+  if(Q.active) return;
+
+  Q.items = eps.map(e=>({e, name:qName(e), state:"waiting", got:0, total:(e.pick.gb||0)*1024*1024*1024, started:0, before:new Set(), seen:false}));
+  Q.i = -1;
+  Q.active = true;
+  Q.list = Q.list || qListDir;
+
+  // one permission prompt for the whole queue; declining just means manual advance
+  await watchFolder();
+  renderQueue();
+  qNext();
+}
+
+async function watchFolder(){
+  if(Q.dir || !window.showDirectoryPicker) return false;
+  try{
+    Q.dir = await window.showDirectoryPicker({id:"manifest-downloads", mode:"read", startIn:"downloads"});
+    return true;
+  }catch(err){ Q.dir = null; return false; }
+}
+
+async function qNext(){
+  clearInterval(Q.timer); Q.timer = null;
+  if(Q.i >= 0 && Q.items[Q.i] && Q.items[Q.i].state === "downloading") Q.items[Q.i].state = "done";
+  Q.i++;
+  if(Q.i >= Q.items.length){ qFinish(); return; }
+  const item = Q.items[Q.i];
+  item.state = "downloading";
+  item.started = Date.now();
+  // snapshot BEFORE triggering, so whatever appears next is this download
+  if(Q.dir){
+    try{ item.before = (await Q.list()).names; }catch(err){ item.before = new Set(); }
+  }
+  qTrigger(item);
+  renderQueue();
+  if(Q.dir) Q.timer = setInterval(qTick, 1500);
+}
+
+async function qTick(){
+  const item = Q.items[Q.i];
+  if(!item || !Q.dir || item.state !== "downloading") return;
+  try{
+    const {names, sizes} = await Q.list();
+    const fresh = [...names].filter(n => !item.before.has(n));
+    const temps = fresh.filter(n => sizes.has(n));
+
+    if(temps.length){
+      item.seen = true;
+      item.got = Math.max(...temps.map(n => sizes.get(n)));
+    }
+    // done when the finished file lands, or when the temp file we watched is gone
+    const landed = fresh.some(n => qMatches(n, item.name));
+    if(landed || (item.seen && !temps.length)){
+      item.state = "done";
+      renderQueue();
+      qNext();
+      return;
+    }
+    // nothing new after a while: likely the wrong folder. Say so, but keep
+    // polling — a slow start shouldn't strand the queue the way it used to.
+    item.hint = !item.seen && Date.now() - item.started > 45000;
+    renderQueue();
+  }catch(err){
+    item.hint = true;
+    renderQueue();
+  }
+}
+
+function qSkip(){ if(!Q.active) return; const it=Q.items[Q.i]; if(it && it.state!=="done") it.state="skipped"; qNext(); }
+
+function qStop(){
+  clearInterval(Q.timer); Q.timer = null;
+  Q.active = false;
+  Q.items.forEach(it=>{ if(it.state==="waiting"||it.state==="downloading") it.state="stopped"; });
+  renderQueue();
+}
+
+function qFinish(){
+  clearInterval(Q.timer); Q.timer = null;
+  Q.active = false;
+  renderQueue();
+  toast("Queue finished");
+}
+
+function qClose(){ Q.items = []; Q.active = false; clearInterval(Q.timer); Q.timer=null; renderQueue(); }
+
+function renderQueue(){
+  let box = $("#queue");
+  if(!Q.items.length){ if(box) box.remove(); return; }
+  if(!box){
+    box = document.createElement("div");
+    box.className = "queue"; box.id = "queue";
+    document.body.appendChild(box);
+  }
+  const done = Q.items.filter(i=>i.state==="done").length;
+  const cur = Q.items[Q.i];
+  box.innerHTML = "";
+
+  const head = document.createElement("div");
+  head.className = "qhead";
+  head.innerHTML = `<b>Queue</b> <span class="qcount">${done}/${Q.items.length} done</span>`;
+  const stop = document.createElement("button");
+  stop.className = "qbtn";
+  stop.textContent = Q.active ? "stop" : "close";
+  stop.onclick = Q.active ? qStop : qClose;
+  head.appendChild(stop);
+  box.appendChild(head);
+
+  const mode = document.createElement("div");
+  mode.className = "qmode";
+  if(Q.dir){
+    mode.textContent = cur && cur.hint
+      ? "nothing new in the watched folder yet — if that's not where downloads land, use next to move on"
+      : "watching your download folder — the next one starts automatically";
+  }else{
+    mode.textContent = "not watching a folder — click next as each download finishes";
+    if(window.showDirectoryPicker && Q.active){
+      const w = document.createElement("button");
+      w.className = "qbtn"; w.textContent = "watch folder";
+      w.onclick = async ()=>{
+        if(await watchFolder()){
+          const it = Q.items[Q.i];
+          if(it){ try{ it.before = (await Q.list()).names; }catch(err){ it.before = new Set(); } }
+          clearInterval(Q.timer);
+          Q.timer = setInterval(qTick, 1500);
+        }
+        renderQueue();
+      };
+      mode.appendChild(document.createElement("br"));
+      mode.appendChild(w);
+    }
+  }
+  box.appendChild(mode);
+
+  Q.items.forEach((it,n)=>{
+    const row = document.createElement("div");
+    row.className = "qrow" + (n===Q.i && Q.active ? " cur" : "");
+    const mark = it.state==="done" ? "✓" : it.state==="downloading" ? "▸" : it.state==="skipped" ? "–" : it.state==="stopped" ? "×" : "·";
+    const pct = it.total && it.got ? Math.min(100, Math.round(it.got/it.total*100)) : null;
+    row.innerHTML = `<span class="qm">${mark}</span><span class="qe">S${String(it.e.season).padStart(2,"0")}E${String(it.e.episode).padStart(2,"0")}</span><span class="qn">${it.name}</span><span class="qp">${
+      it.state==="downloading" ? (pct!==null ? pct+"%" : "…") : ""}</span>`;
+    if(pct!==null && it.state==="downloading"){
+      const bar=document.createElement("div"); bar.className="qbar";
+      const fill=document.createElement("div"); fill.style.width=pct+"%";
+      bar.appendChild(fill); row.appendChild(bar);
+    }
+    box.appendChild(row);
+  });
+
+  if(Q.active){
+    const foot = document.createElement("div");
+    foot.className = "qfoot";
+    const next = document.createElement("button");
+    next.className = "qbtn pri";
+    next.textContent = "next ▸";
+    next.onclick = ()=>{ if(Q.items[Q.i]) Q.items[Q.i].state = "done"; qNext(); };
+    const skip = document.createElement("button");
+    skip.className = "qbtn";
+    skip.textContent = "skip";
+    skip.onclick = qSkip;
+    foot.appendChild(skip); foot.appendChild(next);
+    box.appendChild(foot);
+  }
+}
+
+$("#btnDl").onclick = ()=>{ startQueue(); };
 
 $("#btnAria").onclick = ()=>{
   // aria2 input-file format: URL on one line, indented options beneath
