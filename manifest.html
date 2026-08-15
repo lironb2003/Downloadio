@@ -66,6 +66,8 @@ header .spacer{flex:1}
 .field:last-child{margin-bottom:0}
 label{display:block;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-dim);margin-bottom:5px}
 .hint{font-size:12.5px;color:var(--ink-faint);margin-top:5px;line-height:1.5}
+.ext{display:inline-block;margin-top:6px;font-size:12.5px;color:var(--violet);text-decoration:none;border-bottom:1px solid transparent}
+.ext:hover{border-color:var(--violet)}
 input[type=text],select{
   width:100%;padding:9px 11px;background:var(--void);
   border:1px solid var(--rule);border-radius:3px;
@@ -141,6 +143,11 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
 .pip[data-off=true] .q{color:var(--ink-faint)}
 
 /* ---- table ---- */
+.tools{display:flex;align-items:center;gap:11px;margin-top:14px}
+.tool{padding:5px 12px;border:1px solid var(--rule);border-radius:2px;font-family:"JetBrains Mono",monospace;font-size:12px;color:var(--ink-dim)}
+.tool:hover:not(:disabled){border-color:var(--violet);color:var(--ink)}
+.tool:disabled{opacity:.4;cursor:default}
+.tnote{font-family:"JetBrains Mono",monospace;font-size:11.5px;color:var(--amber)}
 .tbl{margin-top:14px;border:1px solid var(--rule);border-radius:4px;overflow:hidden}
 .ep{
   display:flex;gap:11px;align-items:flex-start;
@@ -163,6 +170,8 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
   padding:2px 6px;border:1px solid var(--rule);border-radius:2px;color:var(--ink-dim);
 }
 .chip.v{border-color:var(--violet-dim);color:#A38EFF}
+.chip.w{border-color:var(--amber);color:var(--amber)}
+.ep .file.warn{color:var(--amber)}
 .ep.miss{opacity:.55}
 .ep .swap{font-size:11.5px;color:var(--ink-faint);border-bottom:1px solid transparent}
 .ep .swap:hover{color:var(--violet);border-color:var(--violet)}
@@ -211,6 +220,7 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
   <div class="field">
     <label for="addon">Stremio addon URL (debrid-enabled)</label>
     <input type="text" id="addon" placeholder="https://torrentio.strem.fun/realdebrid=YOURKEY|sort=qualitysize/manifest.json" spellcheck="false">
+    <a class="ext" href="https://real-debrid.com/apitoken" target="_blank" rel="noopener noreferrer">Find API Key</a>
     <div class="hint">Paste the same configured URL you installed in Stremio — Torrentio, AIOStreams, Comet, MediaFusion. Anything after <span class="mono">/manifest.json</span> is trimmed automatically. Your key stays in this browser.</div>
   </div>
   <div class="row">
@@ -228,6 +238,7 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
       <input type="text" id="maxgb" value="6" spellcheck="false">
     </div>
   </div>
+  <div class="hint" style="margin:-4px 0 14px">Sources are ranked by seeders first — these two break ties between equally-seeded torrents.</div>
   <div class="field">
     <label for="proxy">CORS proxy prefix (optional)</label>
     <input type="text" id="proxy" placeholder="https://your-worker.workers.dev/?u=" spellcheck="false">
@@ -248,6 +259,7 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
   <div class="count" id="count"></div>
   <button class="act" id="btnTxt">Save .txt</button>
   <button class="act" id="btnAria">aria2 input</button>
+  <button class="act" id="btnDl">Download</button>
   <button class="act pri" id="btnCopy">Copy links</button>
 </div>
 <div class="toast" id="toast"></div>
@@ -278,10 +290,32 @@ function base(url){
 function via(url){
   return cfg.proxy ? cfg.proxy + encodeURIComponent(url) : url;
 }
-async function getJSON(url, useProxy){
-  const r = await fetch(useProxy ? via(url) : url, {headers:{accept:"application/json"}});
+const sleep = ms => new Promise(r=>setTimeout(r,ms));
+
+async function getJSON(url, useProxy, signal){
+  const r = await fetch(useProxy ? via(url) : url, {headers:{accept:"application/json"}, signal});
   if(!r.ok) throw new Error("HTTP "+r.status);
   return r.json();
+}
+
+// Torrentio drops requests when too many land at once, and the rejection carries
+// no CORS headers — so the browser reports a bare "Failed to fetch" with no
+// status. They're transient: a short backoff clears them every time. Retry
+// rather than stranding the episode on the first miss.
+async function getJSONRetry(url, useProxy, signal, tries=3){
+  let last;
+  for(let i=0;i<tries;i++){
+    try{
+      return await getJSON(url, useProxy, signal);
+    }catch(err){
+      if(err.name === "AbortError") throw err;
+      const status = (err.message.match(/^HTTP (\d+)/)||[])[1];
+      if(status && !/^(408|429|5\d\d)$/.test(status)) throw err;   // a real error; don't hammer it
+      last = err;
+      if(i < tries-1) await sleep(400 * Math.pow(2,i) + Math.random()*250);
+    }
+  }
+  throw last;
 }
 
 function toast(msg){
@@ -302,40 +336,83 @@ $("#cfgToggle").addEventListener("click",()=>{
 if(!cfg.addon) $("#config").classList.add("open");
 
 /* ---------- stream scoring ---------- */
-const SIZE_RE = /(\d+(?:[.,]\d+)?)\s*(GB|MB|GiB|MiB)/i;
+const SIZE_RE = /(\d+(?:[.,]\d+)?)\s*(TB|GB|MB|TiB|GiB|MiB)\b/i;
+// Torrentio (and Comet/MediaFusion) tag the served file's size with 💾. Release
+// names carry stray sizes of their own — "…[binarygrabber] (56 3 GB)" — and a
+// loose scan grabs those first, so the tagged value wins when it's there.
+const SIZE_TAGGED_RE = /\u{1F4BE}\s*(\d+(?:[.,]\d+)?)\s*(TB|GB|MB|TiB|GiB|MiB)\b/iu;
+// swarm size: Torrentio/Comet/AIOStreams tag it 👤, others spell it out
+const SEED_RE = /\u{1F464}\s*(\d+)/u;
+const SEED_TXT_RE = /\bseeders?\s*[:=]?\s*(\d+)/i;
 
-function parseStream(s){
-  const blob = [s.name, s.title, s.description, s.behaviorHints && s.behaviorHints.filename]
-    .filter(Boolean).join(" ");
-  let res = 0;
-  if(/2160|\b4k\b|uhd/i.test(blob)) res = 2160;
-  else if(/1080/.test(blob)) res = 1080;
-  else if(/720/.test(blob)) res = 720;
-  else if(/480|sd\b/i.test(blob)) res = 480;
-
-  let gb = 0;
-  const m = blob.match(SIZE_RE);
-  if(m){
-    const n = parseFloat(m[1].replace(",", "."));
-    gb = /^m/i.test(m[2]) ? n/1024 : n;
-  }
-
-  let file = (s.behaviorHints && s.behaviorHints.filename) || "";
-  if(!file){
-    const line = blob.split("\n").map(x=>x.trim()).find(x=>/\.(mkv|mp4|avi|m4v)$/i.test(x));
-    if(line) file = line.replace(/^[^\w]+/,"");
-  }
-
-  // Torrentio/AIOStreams mark instantly-available debrid results
-  const cached = /\bRD\+|\[RD\+\]|⚡|instant|cached/i.test(blob);
-
-  return {raw:s, url:s.url, res, gb, file, cached, label: blob.replace(/\s+/g," ").trim().slice(0,150)};
+function toGB(n, unit){
+  const u = unit[0].toLowerCase();
+  return u === "t" ? n*1024 : u === "m" ? n/1024 : n;
 }
 
+function resOf(text){
+  if(!text) return 0;
+  if(/2160|\b4k\b|\buhd\b/i.test(text)) return 2160;
+  if(/1080/.test(text)) return 1080;
+  if(/720/.test(text)) return 720;
+  if(/480|\bsd\b/i.test(text)) return 480;
+  if(/\b(?:360|240)p?\b/i.test(text)) return 360;
+  return 0;
+}
+
+function baseName(f){ return (f||"").split(/[\\/]/).pop().trim(); }
+
+function parseStream(s){
+  const hints = s.behaviorHints || {};
+  const name = s.name || "";
+  const detail = [s.title, s.description].filter(Boolean).join("\n");
+  const blob = [name, detail, hints.filename].filter(Boolean).join(" ");
+
+  let file = baseName(hints.filename);
+  if(!file){
+    // season packs put "Season 1/Episode.mkv" on the second line of the title
+    const line = detail.split("\n").map(x=>x.trim()).find(x=>/\.(mkv|mp4|avi|m4v|ts)$/i.test(x));
+    if(line) file = baseName(line).replace(/^[^\w]+/,"");
+  }
+  if(!file && s.url){
+    // last resort: the resolve URL ends with the name the debrid service serves
+    try{
+      const last = decodeURIComponent(new URL(s.url).pathname.split("/").pop() || "");
+      if(last.length > 8 && !/^(null|undefined)$/i.test(last)) file = last;
+    }catch(e){}
+  }
+
+  // Torrentio puts the quality of the *file it serves* on line 2 of `name`
+  // ("4k", "1080p", "BDRip"); the pack title may advertise other tiers.
+  const tag = name.split("\n").slice(1).join(" ");
+  const res = resOf(tag) || resOf(file) || resOf(detail);
+
+  let gb = 0;
+  const m = detail.match(SIZE_TAGGED_RE) || blob.match(SIZE_RE);
+  if(m) gb = toGB(parseFloat(m[1].replace(",", ".")), m[2]);
+
+  const sm = detail.match(SEED_RE) || detail.match(SEED_TXT_RE);
+  const seeders = sm ? parseInt(sm[1],10) : 0;
+
+  // Cache state, read from `name` only — release titles contain words like
+  // "instant" and would false-positive. Torrentio: "[RD+]" cached vs
+  // "[RD download]" not; other addons use ⚡. null = the addon didn't say.
+  let cached = null;
+  if(/download|queued|⏳/i.test(name)) cached = false;
+  else if(/\+\]|⚡|instant|cached/i.test(name)) cached = true;
+
+  return {raw:s, url:s.url, res, gb, seeders, file, cached, label: blob.replace(/\s+/g," ").trim().slice(0,150)};
+}
+
+// An uncached link doesn't 302 to the file — it redirects to a placeholder mp4
+// until the debrid service has finished downloading the torrent. So cache state
+// is a hard sort key, not a bonus that a size penalty could outweigh.
+function tier(a){ return a.cached === true ? 2 : a.cached === false ? 0 : 1; }
+
+// Seeders decide the pick; quality/size only break ties between equal swarms.
 function rank(a){
   const pref = cfg.pref, cap = cfg.maxgb;
   let score = 0;
-  if(a.cached) score += 1000;                       // never wait on an uncached torrent
   if(cap && a.gb > cap) score -= 800;               // over budget
   if(pref === "any") score += a.gb * 4;
   else {
@@ -350,7 +427,7 @@ function pickStreams(list){
   return list
     .map(parseStream)
     .filter(s => s.url && !/^magnet:/i.test(s.url))  // debrid-resolved only
-    .sort((a,b)=>rank(b)-rank(a));
+    .sort((a,b)=>tier(b)-tier(a) || b.seeders-a.seeders || rank(b)-rank(a));
 }
 
 /* ---------- state ---------- */
@@ -358,11 +435,18 @@ let SHOW = null;      // {id,name,poster,year}
 let EPISODES = [];    // [{season,episode,id,name,state,alts,pick,on}]
 let SEASON = null;
 let RUN = 0;          // cancels stale probe runs
+let ABORT = null;     // ...and drops their in-flight requests
+
+function cancelProbes(){
+  if(ABORT) ABORT.abort();
+  ABORT = null;
+}
 
 /* ---------- search ---------- */
 async function search(){
   const q = $("#q").value.trim();
   if(!q) return;
+  RUN++; cancelProbes();   // leaving the show: stop probing it
   $("#stage").innerHTML = '<div class="empty">Searching…</div>';
   try{
     const d = await getJSON(`${CINEMETA}/catalog/series/top/search=${encodeURIComponent(q)}.json`);
@@ -415,9 +499,14 @@ function renderShow(){
     </div>
     <div class="seasons" id="seasons"></div>
     <div id="stripWrap"></div>
+    <div class="tools" id="tools">
+      <button class="tool" id="btnAll">select all</button>
+      <span class="tnote" id="tnote"></span>
+    </div>
     <div id="tblWrap"></div>
     <div class="note" id="note"></div>
   `;
+  $("#btnAll").onclick = toggleAll;
   $(".showhead h1").textContent = SHOW.name;
   $(".showhead p").textContent = `${SHOW.year} · ${SHOW.id} · ${SHOW.seasons.length} season${SHOW.seasons.length!==1?"s":""}`;
   const sc = $("#seasons");
@@ -428,12 +517,13 @@ function renderShow(){
     b.onclick=()=>selectSeason(s);
     sc.appendChild(b);
   });
-  $("#note").innerHTML = `<b>Handing off:</b> keep JDownloader open with clipboard monitoring on and hit <b>Copy links</b> — every episode lands in LinkGrabber at once. For aria2, save the input file and run <span class="mono">aria2c -i manifest.txt -x8 -j3</span>.`;
+  $("#note").innerHTML = `<b>Handing off:</b> keep JDownloader open with clipboard monitoring on and hit <b>Copy links</b> — every episode lands in LinkGrabber at once. For aria2, save the input file and run <span class="mono">aria2c -i manifest.txt -x8 -j3</span>. <b>Download</b> pulls them straight through the browser instead — fine for a few episodes, though JDownloader and aria2 handle resume and queueing better.<br><b>Not cached:</b> episodes whose only sources are marked <span class="mono">⏳</span> stay unchecked — those links return a placeholder file, not the episode, until Real-Debrid has pulled the torrent. Play one in Stremio to start that, then re-pick the season.`;
 }
 
 function selectSeason(s){
   SEASON = s;
   RUN++;
+  cancelProbes();   // otherwise each season switch stacks 4 more live requests
   document.querySelectorAll("#seasons button").forEach(b=>{
     b.setAttribute("aria-pressed", String(b.textContent === "S"+String(s).padStart(2,"0")));
   });
@@ -478,6 +568,8 @@ async function probeSeason(run){
     return;
   }
   const b = base(cfg.addon);
+  const ctrl = new AbortController();
+  ABORT = ctrl;
   const queue = EPISODES.map((_,i)=>i);
   const workers = Array.from({length:4}, async ()=>{
     while(queue.length){
@@ -486,15 +578,18 @@ async function probeSeason(run){
       const e = EPISODES[i];
       e.state = "probing"; syncOne(i);
       try{
-        const d = await getJSON(`${b}/stream/series/${encodeURIComponent(e.id)}.json`, true);
+        const d = await getJSONRetry(`${b}/stream/series/${encodeURIComponent(e.id)}.json`, true, ctrl.signal);
         if(run !== RUN) return;
         const picks = pickStreams(d.streams||[]);
         e.alts = picks.slice(0,8);
         e.pick = picks[0] || null;
         e.state = e.pick ? "found" : "none";
-        e.on = !!e.pick;
+        e.on = !!e.pick && e.pick.cached !== false;   // never queue a placeholder
       }catch(err){
-        e.state = "none"; e.on = false; e.err = err.message;
+        if(err.name === "AbortError") return;              // season changed under us
+        e.state = "none"; e.on = false;
+        // "Failed to fetch" is what a dropped/CORS-less rejection looks like
+        e.err = err.name === "TypeError" ? "addon didn't respond, click the season to retry" : err.message;
       }
       if(run !== RUN) return;
       syncOne(i); renderRow(i); updateDock();
@@ -549,10 +644,17 @@ function renderRow(i){
     const f=document.createElement("div"); f.className="file";
     f.textContent = e.pick.file || e.pick.label;
     body.appendChild(f);
+    if(e.pick.cached === false){
+      const w=document.createElement("div"); w.className="file warn";
+      w.textContent="Real-Debrid hasn't cached this one — the link serves a placeholder until it finishes downloading. Unchecked; open it in Stremio once to start the transfer.";
+      body.appendChild(w);
+    }
     const meta=document.createElement("div"); meta.className="meta";
     if(e.pick.res) meta.appendChild(chip(e.pick.res===2160?"4K":e.pick.res+"p", true));
     if(e.pick.gb) meta.appendChild(chip(e.pick.gb.toFixed(2)+" GB"));
-    if(e.pick.cached) meta.appendChild(chip("cached"));
+    if(e.pick.seeders) meta.appendChild(chip(e.pick.seeders+" seed"+(e.pick.seeders!==1?"s":"")));
+    if(e.pick.cached === true) meta.appendChild(chip("cached"));
+    else if(e.pick.cached === false) meta.appendChild(chip("not cached", false, true));
     if(e.alts.length>1){
       const sw=document.createElement("button");
       sw.className="swap"; sw.textContent = e.open ? "hide alternatives" : `${e.alts.length-1} other source${e.alts.length>2?"s":""}`;
@@ -569,8 +671,8 @@ function renderRow(i){
   renderAlts(i);
 }
 
-function chip(txt, v){
-  const c=document.createElement("span"); c.className="chip"+(v?" v":""); c.textContent=txt; return c;
+function chip(txt, v, w){
+  const c=document.createElement("span"); c.className="chip"+(v?" v":"")+(w?" w":""); c.textContent=txt; return c;
 }
 
 function renderAlts(i){
@@ -583,7 +685,8 @@ function renderAlts(i){
   e.alts.forEach(a=>{
     const b=document.createElement("button");
     b.className="alt";
-    b.textContent = `${a.res?(a.res===2160?"4K":a.res+"p"):"?"} · ${a.gb?a.gb.toFixed(2)+"GB":"?"} · ${a.file || a.label}`;
+    b.textContent = `${a.cached===true?"⚡":a.cached===false?"⏳":"·"} ${String(a.seeders).padStart(4)} seeds · ${a.res?(a.res===2160?"4K":a.res+"p"):"?"} · ${a.gb?a.gb.toFixed(2)+"GB":"?"} · ${a.file || a.label}`;
+    if(a.cached===false) b.title = "Not cached yet — this link serves a placeholder until Real-Debrid finishes downloading it.";
     b.onclick=()=>{ e.pick=a; e.on=true; e.open=false; syncOne(i); renderRow(i); updateDock(); };
     h.appendChild(b);
   });
@@ -591,6 +694,24 @@ function renderAlts(i){
 
 /* ---------- dock + exports ---------- */
 function selected(){ return EPISODES.filter(e=>e.on && e.pick); }
+function selectable(){ return EPISODES.filter(e=>e.pick); }
+
+function toggleAll(){
+  const list = selectable();
+  if(!list.length) return;
+  // "any selected → clear" rather than "all selected → clear": skipped uncached
+  // episodes would otherwise leave the button stuck on select
+  const anyOn = list.some(e=>e.on);
+  let skipped = 0;
+  list.forEach(e=>{
+    if(anyOn) e.on = false;
+    else if(e.pick.cached === false) skipped++;   // placeholder links stay out
+    else e.on = true;
+  });
+  EPISODES.forEach((_,i)=>syncOne(i));
+  updateDock();
+  if(!anyOn && skipped) toast(`${skipped} skipped — not cached`);
+}
 
 function updateDock(){
   const s = selected();
@@ -599,10 +720,20 @@ function updateDock(){
     ? `<b>${s.length}</b> episode${s.length!==1?"s":""} queued${gb?` · <b>${gb.toFixed(1)} GB</b>`:""}`
     : "";
   $("#dock").classList.toggle("up", s.length>0);
+
+  const btn = $("#btnAll");
+  if(btn){
+    const list = selectable();
+    btn.disabled = !list.length;
+    btn.textContent = list.some(e=>e.on) ? "deselect all" : "select all";
+    const cold = list.filter(e=>e.pick.cached === false).length;
+    $("#tnote").textContent = cold ? `${cold} not cached` : "";
+  }
 }
 
 function fileName(e){
-  if(e.pick.file) return e.pick.file;
+  // aria2 treats a slash in out= as a subdirectory — keep it a bare filename
+  if(e.pick.file) return e.pick.file.split(/[\\/]/).pop().replace(/[:*?"<>|]/g,"");
   const safe = (SHOW.name||"Series").replace(/[\\/:*?"<>|]/g,"");
   return `${safe}.S${String(e.season).padStart(2,"0")}E${String(e.episode).padStart(2,"0")}.mkv`;
 }
@@ -631,6 +762,28 @@ $("#btnTxt").onclick = ()=>{
   save(`${(SHOW.name||"manifest").replace(/\s+/g,".")}.S${String(SEASON).padStart(2,"0")}.txt`,
        selected().map(e=>e.pick.url).join("\n"));
   toast("Saved");
+};
+
+$("#btnDl").onclick = async (ev)=>{
+  const eps = selected();
+  if(!eps.length) return;
+  const btn = ev.currentTarget;
+  btn.disabled = true;
+  toast(`Starting ${eps.length} download${eps.length!==1?"s":""} — allow multiple files if the browser asks`);
+  // Real-Debrid serves the file with Content-Disposition: attachment, so a plain
+  // anchor click downloads it instead of navigating this page away. The download
+  // attribute is ignored cross-origin — the CDN URL already ends in the filename.
+  for(const e of eps){
+    const a = document.createElement("a");
+    a.href = e.pick.url;
+    a.download = fileName(e);
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    await new Promise(r=>setTimeout(r, 800));
+  }
+  btn.disabled = false;
 };
 
 $("#btnAria").onclick = ()=>{
