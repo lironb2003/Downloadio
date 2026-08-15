@@ -233,7 +233,7 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
 .qm{width:10px;text-align:center}
 .qe{color:var(--ink-dim);flex:0 0 auto}
 .qn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.qp{flex:0 0 auto;color:var(--violet)}
+.qp{flex:0 0 auto;color:var(--ink-faint)}
 .qbar{flex:0 0 100%;height:2px;background:var(--rule);border-radius:1px;overflow:hidden}
 .qbar div{height:100%;background:var(--violet)}
 .qfoot{display:flex;gap:7px;justify-content:flex-end;padding:9px 12px;border-top:1px solid var(--rule);position:sticky;bottom:0;background:var(--panel)}
@@ -286,6 +286,14 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
     </div>
   </div>
   <div class="hint" style="margin:-4px 0 14px">Sources are ranked by seeders first — these two break ties between equally-seeded torrents.</div>
+  <div class="field">
+    <label for="dlmode">Downloads</label>
+    <select id="dlmode">
+      <option value="auto">Auto — keep 5 going, start the next as each finishes</option>
+      <option value="manual">Manual — start 5, release the rest with next</option>
+    </select>
+    <div class="hint">Auto asks once for the folder your browser saves into and watches for finished files, since browsers don't tell a page when a download completes. Needs Chrome or Edge over https — otherwise it falls back to manual for that run.</div>
+  </div>
   <div class="field">
     <label for="proxy">CORS proxy prefix (optional)</label>
     <input type="text" id="proxy" placeholder="https://your-worker.workers.dev/?u=" spellcheck="false">
@@ -346,6 +354,7 @@ const cfg = {
   // the addon URL is derived, not stored
   get addon(){ return this.apikey ? `${TORRENTIO}/${this.provider}=${encodeURIComponent(this.apikey)}/manifest.json` : ""; },
   get proxy(){ return (store.get("mf.proxy")||"").trim(); },
+  get dlmode(){ return store.get("mf.dlmode") === "manual" ? "manual" : "auto"; },
   get pref(){ return store.get("mf.pref")||"1080"; },
   get maxgb(){ return parseFloat(store.get("mf.maxgb")||"6")||0; }
 };
@@ -444,6 +453,8 @@ syncProvider();
 });
 $("#pref").value = cfg.pref;
 $("#pref").addEventListener("change",e=>store.set("mf.pref",e.target.value));
+$("#dlmode").value = cfg.dlmode;
+$("#dlmode").addEventListener("change",e=>store.set("mf.dlmode",e.target.value));
 $("#cfgToggle").addEventListener("click",()=>{
   $("#config").classList.toggle("open");
 });
@@ -693,7 +704,7 @@ function renderShow(){
     b.onclick=()=>selectSeason(s);
     sc.appendChild(b);
   });
-  $("#note").innerHTML = `<b>Handing off:</b> keep JDownloader open with clipboard monitoring on and hit <b>Copy links</b> — every episode lands in LinkGrabber at once. For aria2, save the input file and run <span class="mono">aria2c -i manifest.txt -x8 -j1</span> — <span class="mono">-j1</span> keeps it to one file at a time.<br><b>Download</b> runs them through the browser one at a time, oldest episode first. Chrome won't tell a page when a download finishes, so it watches the folder you point it at and starts the next when the previous one lands; if you skip the folder prompt, hit <b>next</b> yourself as each finishes.<br><b>Not cached:</b> episodes whose only sources are marked <span class="mono">⏳</span> stay unchecked — those links return a placeholder file, not the episode, until Real-Debrid has pulled the torrent. Play one in Stremio to start that, then re-pick the season.`;
+  $("#note").innerHTML = `<b>Handing off:</b> keep JDownloader open with clipboard monitoring on and hit <b>Copy links</b> — every episode lands in LinkGrabber at once. For aria2, save the input file and run <span class="mono">aria2c -i manifest.txt -x8 -j1</span> — <span class="mono">-j1</span> keeps it to one file at a time.<br><b>Download</b> runs five at a time, oldest episode first. On <b>auto</b> it watches your download folder and releases the next as each file lands; on <b>manual</b> you press <b>next</b> yourself. Switch in settings.<br><b>Not cached:</b> episodes whose only sources are marked <span class="mono">⏳</span> stay unchecked — those links return a placeholder file, not the episode, until Real-Debrid has pulled the torrent. Play one in Stremio to start that, then re-pick the season.`;
 }
 
 function selectSeason(s){
@@ -1040,22 +1051,31 @@ $("#btnTxt").onclick = ()=>{
 };
 
 /* ---------- download queue ----------
-   The debrid CDN sends no CORS headers, so this page can't fetch the bytes
-   itself — downloads have to be handed to the browser, which never reports back
-   when one finishes. The only way to see completion is to watch the folder the
-   browser saves into: it writes "<name>.crdownload" while transferring and
-   renames it when done. That needs the File System Access API (Chrome/Edge over
-   https). Without it the queue advances on a click instead.               */
+   Two modes, because a page gets no completion callback for downloads the
+   browser manages, and the debrid CDN sends no CORS headers (so the bytes can't
+   be watched here either).
+
+   manual — hand over QUEUE_KEEP downloads, then release one per press.
+   auto   — same, but watch the folder the browser saves into and release the
+            next as each file lands, keeping QUEUE_KEEP in flight. With several
+            running at once the in-progress temp files can't be told apart
+            (Chrome names them "Unconfirmed 123456.crdownload"), so completion
+            keys off each episode's own finished filename appearing.        */
+const QUEUE_KEEP = 5;
+
 const Q = {
-  items: [],       // {e, name, state, got, total, started, before, seen}
-  i: -1,
-  active: false,
-  dir: null,       // watched FileSystemDirectoryHandle
+  items: [],        // {e, name, state, at, before, got, total}
+  started: 0,
+  mode: "manual",   // resolved per run: "auto" only once a folder is granted
+  dir: null,
   timer: null,
-  list: null       // swappable for testing
+  list: null,       // swappable for testing
+  sawAny: false
 };
 
 function qName(e){ return fileName(e); }
+function qIsTemp(n){ return /\.(crdownload|part|download|tmp)$/i.test(n); }
+function qStripTemp(n){ return n.replace(/\.(crdownload|part|download|tmp)$/i, ""); }
 
 // Chrome dedupes "X.mkv" to "X (1).mkv" when the name is taken
 function qMatches(name, target){
@@ -1066,23 +1086,26 @@ function qMatches(name, target){
   return new RegExp(`^${esc(base)}(?: \\(\\d+\\))?${esc(ext)}$`, "i").test(name);
 }
 
-// One listing of the watched folder. Detection is deliberately name-agnostic
-// for the in-progress file: Chrome usually calls it "Unconfirmed 123456.crdownload",
-// not "<filename>.crdownload", so matching on our own name never fires. Instead
-// each item snapshots the folder before it starts, and anything NEW is ours —
-// which also avoids depending on file timestamps, since a saved file can carry
-// the server's Last-Modified rather than the time it landed.
 async function qListDir(){
   const names = new Set();
   const sizes = new Map();
   for await (const [name, handle] of Q.dir.entries()){
     if(handle.kind !== "file") continue;
     names.add(name);
-    if(/\.(crdownload|part|download|tmp)$/i.test(name)){
+    if(qIsTemp(name)){
       try{ sizes.set(name, (await handle.getFile()).size); }catch(err){}
     }
   }
   return {names, sizes};
+}
+
+async function watchFolder(){
+  if(Q.dir) return true;
+  if(!window.showDirectoryPicker) return false;
+  try{
+    Q.dir = await window.showDirectoryPicker({id:"manifest-downloads", mode:"read", startIn:"downloads"});
+    return true;
+  }catch(err){ Q.dir = null; return false; }
 }
 
 function qTrigger(item){
@@ -1094,96 +1117,104 @@ function qTrigger(item){
   document.body.appendChild(a);
   a.click();
   a.remove();
+  item.state = "active";
+  item.at = Date.now();
+}
+
+function qActive(){ return Q.items.filter(i=>i.state === "active").length; }
+function qWaiting(){ return Q.items.filter(i=>i.state === "waiting").length; }
+
+async function qStartNext(){
+  const item = Q.items.find(i=>i.state === "waiting");
+  if(!item) return false;
+  // snapshot BEFORE triggering, so a file appearing later belongs to this one
+  if(Q.dir){
+    try{ item.before = (await Q.list()).names; }catch(err){ item.before = new Set(); }
+  }
+  qTrigger(item);
+  Q.started++;
+  renderQueue();
+  return true;
+}
+
+async function qFill(){
+  while(qActive() < QUEUE_KEEP && qWaiting()){
+    await qStartNext();
+    await sleep(500);        // a tight burst can trip Chrome's multi-download block
+  }
+}
+
+// Two-parters share one file in a season pack — S10E17 and S10E18 of Friends are
+// the same .mkv — so collapse by URL rather than fetching it twice.
+function qBuild(eps){
+  const items = [], byUrl = new Map();
+  eps.forEach(e=>{
+    const hit = byUrl.get(e.pick.url);
+    if(hit){ hit.eps.push(e); return; }
+    const item = {eps:[e], e, name:qName(e), state:"waiting", at:0, before:new Set(), got:0, total:(e.pick.gb||0)*1024*1024*1024};
+    byUrl.set(e.pick.url, item);
+    items.push(item);
+  });
+  return items;
+}
+
+function qCode(item){
+  const season = String(item.eps[0].season).padStart(2,"0");
+  return "S" + season + item.eps.map(e=>"E"+String(e.episode).padStart(2,"0")).join("+");
 }
 
 async function startQueue(){
   const eps = selected().slice().sort((a,b)=> a.season-b.season || a.episode-b.episode);
   if(!eps.length) return;
-  if(Q.active) return;
-
-  Q.items = eps.map(e=>({e, name:qName(e), state:"waiting", got:0, total:(e.pick.gb||0)*1024*1024*1024, started:0, before:new Set(), seen:false}));
-  Q.i = -1;
-  Q.active = true;
+  qStopWatch();
+  Q.items = qBuild(eps);
+  Q.episodes = eps.length;
+  Q.started = 0;
+  Q.sawAny = false;
   Q.list = Q.list || qListDir;
-
-  // one permission prompt for the whole queue; declining just means manual advance
-  await watchFolder();
+  Q.mode = (cfg.dlmode === "auto" && await watchFolder()) ? "auto" : "manual";
   renderQueue();
-  qNext();
-}
-
-async function watchFolder(){
-  if(Q.dir || !window.showDirectoryPicker) return false;
-  try{
-    Q.dir = await window.showDirectoryPicker({id:"manifest-downloads", mode:"read", startIn:"downloads"});
-    return true;
-  }catch(err){ Q.dir = null; return false; }
-}
-
-async function qNext(){
-  clearInterval(Q.timer); Q.timer = null;
-  if(Q.i >= 0 && Q.items[Q.i] && Q.items[Q.i].state === "downloading") Q.items[Q.i].state = "done";
-  Q.i++;
-  if(Q.i >= Q.items.length){ qFinish(); return; }
-  const item = Q.items[Q.i];
-  item.state = "downloading";
-  item.started = Date.now();
-  // snapshot BEFORE triggering, so whatever appears next is this download
-  if(Q.dir){
-    try{ item.before = (await Q.list()).names; }catch(err){ item.before = new Set(); }
-  }
-  qTrigger(item);
-  renderQueue();
-  if(Q.dir) Q.timer = setInterval(qTick, 1500);
+  const first = Math.min(QUEUE_KEEP, Q.items.length);
+  const shared = Q.episodes - Q.items.length;
+  toast(`Starting ${first} download${first!==1?"s":""}${shared?` · ${Q.episodes} episodes share ${Q.items.length} files`:""} — allow multiple files if the browser asks`);
+  await qFill();
+  if(Q.mode === "auto") Q.timer = setInterval(qTick, 1500);
 }
 
 async function qTick(){
-  const item = Q.items[Q.i];
-  if(!item || !Q.dir || item.state !== "downloading") return;
+  if(Q.mode !== "auto" || !Q.dir) return;
   try{
     const {names, sizes} = await Q.list();
-    const fresh = [...names].filter(n => !item.before.has(n));
-    const temps = fresh.filter(n => sizes.has(n));
-
-    if(temps.length){
-      item.seen = true;
-      item.got = Math.max(...temps.map(n => sizes.get(n)));
-    }
-    // done when the finished file lands, or when the temp file we watched is gone
-    const landed = fresh.some(n => qMatches(n, item.name));
-    if(landed || (item.seen && !temps.length)){
-      item.state = "done";
-      renderQueue();
-      qNext();
-      return;
-    }
-    // nothing new after a while: likely the wrong folder. Say so, but keep
-    // polling — a slow start shouldn't strand the queue the way it used to.
-    item.hint = !item.seen && Date.now() - item.started > 45000;
+    let finished = 0;
+    Q.items.forEach(item=>{
+      if(item.state !== "active") return;
+      const fresh = [...names].filter(n => !item.before.has(n));
+      // the finished file is the only thing pinnable to a specific episode
+      if(fresh.some(n => !qIsTemp(n) && qMatches(n, item.name))){
+        item.state = "done"; finished++; Q.sawAny = true;
+        return;
+      }
+      // progress only when the browser happens to name the temp after the file
+      const temp = fresh.find(n => qIsTemp(n) && qMatches(qStripTemp(n), item.name));
+      if(temp){ item.got = sizes.get(temp) || 0; Q.sawAny = true; }
+      else if(fresh.some(qIsTemp)) Q.sawAny = true;
+    });
+    if(finished) await qFill();
+    if(!qActive() && !qWaiting()){ qStopWatch(); toast("Queue finished"); }
     renderQueue();
   }catch(err){
-    item.hint = true;
+    qStopWatch();
     renderQueue();
   }
 }
 
-function qSkip(){ if(!Q.active) return; const it=Q.items[Q.i]; if(it && it.state!=="done") it.state="skipped"; qNext(); }
+function qStopWatch(){ clearInterval(Q.timer); Q.timer = null; }
+function qClose(){ qStopWatch(); Q.items = []; Q.started = 0; renderQueue(); }
 
-function qStop(){
-  clearInterval(Q.timer); Q.timer = null;
-  Q.active = false;
-  Q.items.forEach(it=>{ if(it.state==="waiting"||it.state==="downloading") it.state="stopped"; });
-  renderQueue();
+function qStalled(){
+  const firstAt = Math.min(...Q.items.filter(i=>i.at).map(i=>i.at));
+  return Q.started > 0 && !Q.sawAny && isFinite(firstAt) && Date.now() - firstAt > 60000;
 }
-
-function qFinish(){
-  clearInterval(Q.timer); Q.timer = null;
-  Q.active = false;
-  renderQueue();
-  toast("Queue finished");
-}
-
-function qClose(){ Q.items = []; Q.active = false; clearInterval(Q.timer); Q.timer=null; renderQueue(); }
 
 function renderQueue(){
   let box = $("#queue");
@@ -1193,73 +1224,70 @@ function renderQueue(){
     box.className = "queue"; box.id = "queue";
     document.body.appendChild(box);
   }
-  const done = Q.items.filter(i=>i.state==="done").length;
-  const cur = Q.items[Q.i];
+  const waiting = qWaiting(), active = qActive();
+  const done = Q.items.filter(i=>i.state === "done").length;
   box.innerHTML = "";
 
   const head = document.createElement("div");
   head.className = "qhead";
-  head.innerHTML = `<b>Queue</b> <span class="qcount">${done}/${Q.items.length} done</span>`;
-  const stop = document.createElement("button");
-  stop.className = "qbtn";
-  stop.textContent = Q.active ? "stop" : "close";
-  stop.onclick = Q.active ? qStop : qClose;
-  head.appendChild(stop);
+  const title = document.createElement("b");
+  title.textContent = Q.mode === "auto" ? "Queue · auto" : "Queue · manual";
+  const count = document.createElement("span");
+  count.className = "qcount";
+  count.textContent = Q.mode === "auto"
+    ? `${done}/${Q.items.length} done · ${active} running`
+    : `${Q.started}/${Q.items.length} started`;
+  const close = document.createElement("button");
+  close.className = "qbtn"; close.textContent = "close"; close.onclick = qClose;
+  head.append(title, count, close);
   box.appendChild(head);
 
   const mode = document.createElement("div");
   mode.className = "qmode";
-  if(Q.dir){
-    mode.textContent = cur && cur.hint
-      ? "nothing new in the watched folder yet — if that's not where downloads land, use next to move on"
-      : "watching your download folder — the next one starts automatically";
+  if(Q.mode === "auto"){
+    mode.textContent = qStalled()
+      ? "Nothing new in the watched folder yet — if that isn't where downloads land, release the rest with next."
+      : `Watching your download folder — keeps ${QUEUE_KEEP} going and starts the next as each one lands.`;
   }else{
-    mode.textContent = "not watching a folder — click next as each download finishes";
-    if(window.showDirectoryPicker && Q.active){
-      const w = document.createElement("button");
-      w.className = "qbtn"; w.textContent = "watch folder";
-      w.onclick = async ()=>{
-        if(await watchFolder()){
-          const it = Q.items[Q.i];
-          if(it){ try{ it.before = (await Q.list()).names; }catch(err){ it.before = new Set(); } }
-          clearInterval(Q.timer);
-          Q.timer = setInterval(qTick, 1500);
-        }
-        renderQueue();
-      };
-      mode.appendChild(document.createElement("br"));
-      mode.appendChild(w);
-    }
+    mode.textContent = cfg.dlmode === "auto"
+      ? "Couldn't watch a folder, so this run is manual — press next as each download finishes."
+      : `Started ${Math.min(QUEUE_KEEP, Q.items.length)} — press next as each download finishes.`;
   }
   box.appendChild(mode);
 
-  Q.items.forEach((it,n)=>{
+  Q.items.forEach(it=>{
     const row = document.createElement("div");
-    row.className = "qrow" + (n===Q.i && Q.active ? " cur" : "");
-    const mark = it.state==="done" ? "✓" : it.state==="downloading" ? "▸" : it.state==="skipped" ? "–" : it.state==="stopped" ? "×" : "·";
-    const pct = it.total && it.got ? Math.min(100, Math.round(it.got/it.total*100)) : null;
-    row.innerHTML = `<span class="qm">${mark}</span><span class="qe">S${String(it.e.season).padStart(2,"0")}E${String(it.e.episode).padStart(2,"0")}</span><span class="qn">${it.name}</span><span class="qp">${
-      it.state==="downloading" ? (pct!==null ? pct+"%" : "…") : ""}</span>`;
-    if(pct!==null && it.state==="downloading"){
-      const bar=document.createElement("div"); bar.className="qbar";
-      const fill=document.createElement("div"); fill.style.width=pct+"%";
+    row.className = "qrow" + (it.state === "active" ? " cur" : "");
+    const mark = document.createElement("span");
+    mark.className = "qm";
+    mark.textContent = it.state === "done" ? "✓" : it.state === "active" ? "▸" : "·";
+    const code = document.createElement("span");
+    code.className = "qe";
+    code.textContent = qCode(it);
+    const name = document.createElement("span");
+    name.className = "qn"; name.textContent = it.name;
+    const note = document.createElement("span");
+    note.className = "qp";
+    const pct = it.state === "active" && it.total && it.got ? Math.min(100, Math.round(it.got/it.total*100)) : null;
+    note.textContent = pct !== null ? pct + "%"
+                     : it.at ? new Date(it.at).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"}) : "";
+    row.append(mark, code, name, note);
+    if(pct !== null){
+      const bar = document.createElement("div"); bar.className = "qbar";
+      const fill = document.createElement("div"); fill.style.width = pct + "%";
       bar.appendChild(fill); row.appendChild(bar);
     }
     box.appendChild(row);
   });
 
-  if(Q.active){
+  if(waiting){
     const foot = document.createElement("div");
     foot.className = "qfoot";
     const next = document.createElement("button");
     next.className = "qbtn pri";
-    next.textContent = "next ▸";
-    next.onclick = ()=>{ if(Q.items[Q.i]) Q.items[Q.i].state = "done"; qNext(); };
-    const skip = document.createElement("button");
-    skip.className = "qbtn";
-    skip.textContent = "skip";
-    skip.onclick = qSkip;
-    foot.appendChild(skip); foot.appendChild(next);
+    next.textContent = `next ▸ (${waiting} left)`;
+    next.onclick = ()=>qStartNext();
+    foot.appendChild(next);
     box.appendChild(foot);
   }
 }

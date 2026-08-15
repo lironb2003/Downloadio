@@ -35,32 +35,31 @@ as poster cards under the search box whenever nothing else is on screen. The las
 
 ## Download queue
 
-**Download** runs the selected episodes one at a time, oldest first, instead of
-handing them all to the browser at once (which caps out around six parallel
-transfers sharing your bandwidth).
+**Download** runs five at a time, oldest episode first — handing the browser
+everything at once just gets you about six parallel transfers splitting your
+bandwidth. Two modes, chosen in settings:
 
-Detecting when a download finishes is awkward from a web page: the debrid CDN
-sends no CORS headers, so the page can't fetch the bytes itself, and the browser
-never reports back on downloads it manages. So the queue watches the folder you
-save into and starts the next episode when the current file lands.
+- **Auto** watches the folder your browser saves into and releases the next
+  episode as each file lands, keeping five going. It asks once for the folder
+  (read-only) and needs the File System Access API, so Chrome or Edge over https;
+  opening `index.html` straight off disk may not qualify. If it isn't available
+  that run falls back to manual and says so.
+- **Manual** starts five and holds the rest; each press of **next** releases one
+  more.
 
-It does that without relying on filenames for the in-progress file, because
-Chrome generally names it `Unconfirmed 123456.crdownload` rather than
-`<your file>.crdownload`. Each item snapshots the folder before its download
-starts, and anything new belongs to it — a new temp file gives live progress, and
-the finished file (or the temp file disappearing) means done. That also avoids
-depending on file timestamps, since a saved file can carry the server's
-`Last-Modified` instead of the time it actually landed.
+Detection is deliberately narrow, because a page gets no completion callback for
+downloads the browser manages and the debrid CDN sends no CORS headers, so the
+bytes can't be watched here either. With five transfers running, the in-progress
+temp files can't be told apart — Chrome names them `Unconfirmed 123456.crdownload`
+— so an episode counts as finished only when a file with *its* name appears that
+wasn't there when it started. Progress percentages show up only when the browser
+happens to name the temp file after the real one. **next** is available in auto
+mode too, so a missed detection never strands the queue.
 
-Watching needs the File System Access API, so **Chrome or Edge over https** —
-note that opening `index.html` straight off disk may not qualify. Granting the
-folder is one read-only prompt for the whole queue.
+Episodes that share a file are downloaded once: a two-part finale in a season
+pack is a single `.mkv`, and the queue shows it as one row (`S10E17+E18`).
 
-Decline the prompt, or use a browser without that API, and the queue still runs
-one at a time — you just click **next** as each download finishes. `skip` drops
-the current episode, `stop` halts the rest.
-
-For a fully hands-off run, the aria2 export with `-j1` does the same thing
+For a hands-off run, the aria2 export with `-j1` downloads them sequentially
 outside the browser.
 
 ## One source for a whole season
