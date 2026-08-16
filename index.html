@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Manifest — season downloader</title>
+<title>Downloadio - Freedom to Download</title>
+<link rel="icon" type="image/svg+xml" href="logo/downloadio-mark.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:ital,wght@0,400..700;1,400&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
@@ -43,14 +44,11 @@ input,select{font:inherit;color:inherit}
 
 /* ---- masthead ---- */
 header{
-  display:flex;align-items:baseline;gap:12px;
+  display:flex;align-items:center;gap:12px;
   padding:22px 0 14px;border-bottom:1px solid var(--rule);
   flex-wrap:wrap;
 }
-.logo{
-  font-weight:700;font-size:19px;letter-spacing:-0.02em;
-}
-.logo em{font-style:normal;color:var(--violet)}
+.logo img{display:block;height:30px;width:auto}
 .tag{color:var(--ink-faint);font-size:13px;letter-spacing:.02em}
 header .spacer{flex:1}
 .linkbtn{color:var(--ink-dim);font-size:13px;border-bottom:1px solid transparent;padding-bottom:1px}
@@ -249,7 +247,7 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
 <div class="wrap">
 
 <header>
-  <div class="logo">MANI<em>FEST</em></div>
+  <div class="logo"><img src="logo/downloadio-logo-horizontal-white.svg" alt="Downloadio" width="140" height="30"></div>
   <div class="tag">season → link list → download manager</div>
   <div class="spacer"></div>
   <button class="linkbtn" id="cfgToggle">settings</button>
@@ -704,7 +702,7 @@ function renderShow(){
     b.onclick=()=>selectSeason(s);
     sc.appendChild(b);
   });
-  $("#note").innerHTML = `<b>Handing off:</b> keep JDownloader open with clipboard monitoring on and hit <b>Copy links</b> — every episode lands in LinkGrabber at once. For aria2, save the input file and run <span class="mono">aria2c -i manifest.txt -x8 -j1</span> — <span class="mono">-j1</span> keeps it to one file at a time.<br><b>Download</b> runs five at a time, oldest episode first. On <b>auto</b> it watches your download folder and releases the next as each file lands; on <b>manual</b> you press <b>next</b> yourself. Switch in settings.<br><b>Not cached:</b> episodes whose only sources are marked <span class="mono">⏳</span> stay unchecked — those links return a placeholder file, not the episode, until Real-Debrid has pulled the torrent. Play one in Stremio to start that, then re-pick the season.`;
+  $("#note").innerHTML = `<b>Handing off:</b> keep JDownloader open with clipboard monitoring on and hit <b>Copy links</b> — every episode lands in LinkGrabber at once. For aria2, save the input file and run <span class="mono">aria2c -i downloadio.txt -x8 -j1</span> — <span class="mono">-j1</span> keeps it to one file at a time.<br><b>Download</b> runs five at a time, oldest episode first. On <b>auto</b> it watches your download folder and releases the next as each file lands; on <b>manual</b> you press <b>next</b> yourself. Switch in settings.<br><b>Not cached:</b> episodes whose only sources are marked <span class="mono">⏳</span> stay unchecked — those links return a placeholder file, not the episode, until Real-Debrid has pulled the torrent. Play one in Stremio to start that, then re-pick the season.`;
 }
 
 function selectSeason(s){
@@ -1045,7 +1043,7 @@ function save(name, text){
 }
 
 $("#btnTxt").onclick = ()=>{
-  save(`${(SHOW.name||"manifest").replace(/\s+/g,".")}.S${String(SEASON).padStart(2,"0")}.txt`,
+  save(`${(SHOW.name||"downloadio").replace(/\s+/g,".")}.S${String(SEASON).padStart(2,"0")}.txt`,
        selected().map(e=>e.pick.url).join("\n"));
   toast("Saved");
 };
@@ -1103,7 +1101,7 @@ async function watchFolder(){
   if(Q.dir) return true;
   if(!window.showDirectoryPicker) return false;
   try{
-    Q.dir = await window.showDirectoryPicker({id:"manifest-downloads", mode:"read", startIn:"downloads"});
+    Q.dir = await window.showDirectoryPicker({id:"downloadio-downloads", mode:"read", startIn:"downloads"});
     return true;
   }catch(err){ Q.dir = null; return false; }
 }
@@ -1297,7 +1295,7 @@ $("#btnDl").onclick = ()=>{ startQueue(); };
 $("#btnAria").onclick = ()=>{
   // aria2 input-file format: URL on one line, indented options beneath
   const body = selected().map(e=>`${e.pick.url}\n  out=${fileName(e)}`).join("\n");
-  save(`${(SHOW.name||"manifest").replace(/\s+/g,".")}.S${String(SEASON).padStart(2,"0")}.aria2.txt`, body);
+  save(`${(SHOW.name||"downloadio").replace(/\s+/g,".")}.S${String(SEASON).padStart(2,"0")}.aria2.txt`, body);
   toast("Run: aria2c -i <file> -x8 -j3");
 };
 </script>

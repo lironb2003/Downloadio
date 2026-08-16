@@ -1,4 +1,4 @@
-# Manifest
+# Downloadio
 
 A single-page tool that turns a Stremio debrid addon into a season download list.
 Search a series, pick a season, and it probes every episode against your addon,
