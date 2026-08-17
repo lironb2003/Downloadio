@@ -120,7 +120,8 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
 .pip .bar{
   height:32px;border-radius:2px;
   background:var(--panel-2);border:1px solid var(--rule);
-  position:relative;overflow:hidden;
+  /* z-index:0 keeps the number's stacking inside the tile, off the dock */
+  position:relative;z-index:0;overflow:hidden;
   transition:border-color .12s,background .12s,transform .08s;
 }
 .pip .q{
@@ -206,7 +207,7 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
 
 /* ---- dock ---- */
 .dock{
-  position:fixed;left:0;right:0;bottom:0;
+  position:fixed;left:0;right:0;bottom:0;z-index:10;
   background:rgba(20,22,30,.94);backdrop-filter:blur(10px);
   border-top:1px solid var(--rule);
   padding:11px 16px;
@@ -228,7 +229,7 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
 /* ---- download queue ---- */
 .queue{
   position:fixed;right:16px;bottom:64px;width:352px;max-width:calc(100vw - 32px);
-  max-height:54vh;overflow:auto;z-index:5;
+  max-height:54vh;overflow:auto;z-index:20;   /* over the dock it sits on */
   background:var(--panel);border:1px solid var(--rule);border-radius:4px;
   box-shadow:0 8px 28px rgba(0,0,0,.45);
 }
@@ -249,7 +250,7 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
 .qbtn:hover{border-color:var(--violet);color:var(--ink)}
 .qbtn.pri{background:var(--violet);border-color:var(--violet);color:#fff}
 .qbtn.pri:hover{background:#8E71FF}
-.toast{position:fixed;bottom:74px;left:50%;transform:translateX(-50%) translateY(20px);opacity:0;background:var(--panel-2);border:1px solid var(--violet);border-radius:3px;padding:9px 16px;font-size:13px;transition:.2s;pointer-events:none}
+.toast{position:fixed;z-index:30;bottom:74px;left:50%;transform:translateX(-50%) translateY(20px);opacity:0;background:var(--panel-2);border:1px solid var(--violet);border-radius:3px;padding:9px 16px;font-size:13px;transition:.2s;pointer-events:none}
 .toast.show{opacity:1;transform:translateX(-50%)}
 </style>
 </head>
