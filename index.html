@@ -1092,8 +1092,7 @@ $("#btnCopy").onclick = async ()=>{
             keys off each episode's own finished filename appearing.        */
 const QUEUE_KEEP = 5;
 const QUEUE_GAP_MS = 1500;    // cooldown between starts; back-to-back ones get dropped
-const QUEUE_TAB_MS = 6000;    // how long a download tab is left open to get going
-const QUEUE_FRAME_MS = 15000; // ditto for the hidden-frame fallback
+const QUEUE_FRAME_MS = 15000; // how long a download's frame is kept before removal
 
 const Q = {
   items: [],        // {e, name, state, at, before, got, total}
@@ -1103,7 +1102,9 @@ const Q = {
   timer: null,
   list: null,       // swappable for testing
   sawAny: false,
-  filling: false    // qFill is async now, and a tick can land in the middle of one
+  filling: false,   // qFill is async now, and a tick can land in the middle of one
+  chain: Promise.resolve(),   // every release runs through here, one at a time
+  lastAt: 0         // when the last one actually started, for the cooldown
 };
 
 function qName(e){ return fileName(e); }
@@ -1146,35 +1147,18 @@ async function watchFolder(){
    ignored and a click was a top-level navigation — it downloaded only because
    the CDN sends Content-Disposition: attachment, and each new click replaced
    the previous one while its headers were still in flight, which is how
-   downloads went missing. A separate tab (or frame) per URL can't be replaced
-   by its siblings.                                                          */
+   downloads went missing. A frame of its own per URL can't be replaced by its
+   siblings, and unlike window.open it neither opens a tab nor takes focus —
+   the page you are on stays the page you are looking at.                    */
 function qTrigger(item){
-  const url = item.e.pick.url;
-  if(!qTriggerTab(url)) qTriggerFrame(url);
-  item.state = "active";
-  item.at = Date.now();
-}
-
-// No noopener here: window.open returns null with it, and the handle is what
-// lets us close the tab. Chrome usually closes it itself once the response
-// turns out to be an attachment; this is the backstop for when it doesn't.
-function qTriggerTab(url){
-  let w = null;
-  try{ w = window.open(url, "_blank"); }catch(err){ return false; }
-  if(!w) return false;                       // popup blocker
-  setTimeout(()=>{ try{ w.close(); }catch(err){} }, QUEUE_TAB_MS);
-  return true;
-}
-
-// Popups are blocked outside a user gesture, so most of a run lands here: a
-// frame navigates independently of the page, giving the same isolation without
-// asking permission. Removal is delayed past the point the download detaches.
-function qTriggerFrame(url){
   const f = document.createElement("iframe");
   f.style.display = "none";
-  f.src = url;
+  f.src = item.e.pick.url;
   document.body.appendChild(f);
+  // removal is delayed well past the point the download detaches from the frame
   setTimeout(()=>f.remove(), QUEUE_FRAME_MS);
+  item.state = "active";
+  item.at = Date.now();
 }
 
 function qActive(){ return Q.items.filter(i=>i.state === "active").length; }
@@ -1193,14 +1177,27 @@ async function qStartNext(){
   return true;
 }
 
+/* The single door every download leaves by. Presses of next, the first batch
+   and the folder watcher all queue up here, so two of them can never pick the
+   same waiting item, and none can start closer than the cooldown — pressing
+   next five times fast releases five, spaced out, instead of losing some. */
+function qRelease(){
+  Q.chain = Q.chain.then(async ()=>{
+    if(!qWaiting()) return false;
+    const wait = QUEUE_GAP_MS - (Date.now() - Q.lastAt);
+    if(wait > 0) await sleep(wait);
+    const started = await qStartNext();
+    if(started) Q.lastAt = Date.now();
+    return started;
+  });
+  return Q.chain;
+}
+
 async function qFill(){
   if(Q.filling) return;      // a folder tick mustn't start a second run of these
   Q.filling = true;
   try{
-    while(qActive() < QUEUE_KEEP && qWaiting()){
-      await qStartNext();
-      if(qActive() < QUEUE_KEEP && qWaiting()) await sleep(QUEUE_GAP_MS);
-    }
+    while(qActive() < QUEUE_KEEP && qWaiting()) await qRelease();
   }finally{ Q.filling = false; }
 }
 
@@ -1231,6 +1228,8 @@ async function startQueue(){
   Q.episodes = eps.length;
   Q.started = 0;
   Q.sawAny = false;
+  Q.chain = Promise.resolve();
+  Q.lastAt = 0;
   Q.list = Q.list || qListDir;
   Q.mode = (cfg.dlmode === "auto" && await watchFolder()) ? "auto" : "manual";
   renderQueue();
@@ -1343,10 +1342,19 @@ function renderQueue(){
   if(waiting){
     const foot = document.createElement("div");
     foot.className = "qfoot";
+    // a whole batch at once, for when the last five have all landed
+    const batch = Math.min(QUEUE_KEEP, waiting);
+    if(batch > 1){
+      const many = document.createElement("button");
+      many.className = "qbtn";
+      many.textContent = `start ${batch} next`;
+      many.onclick = ()=>{ for(let i=0;i<batch;i++) qRelease(); };
+      foot.appendChild(many);
+    }
     const next = document.createElement("button");
     next.className = "qbtn pri";
     next.textContent = `next ▸ (${waiting} left)`;
-    next.onclick = ()=>qStartNext();
+    next.onclick = ()=>qRelease();
     foot.appendChild(next);
     box.appendChild(foot);
   }

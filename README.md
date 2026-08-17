@@ -37,12 +37,12 @@ as poster cards under the search box whenever nothing else is on screen. The las
 
 **Download** runs five at a time, oldest episode first — handing the browser
 everything at once just gets you about six parallel transfers splitting your
-bandwidth. Starts are spaced 1.5s apart, and each link is handed to its own tab
-(a hidden frame when the popup blocker steps in, which is most of a run) rather
-than being clicked in this one. Debrid links are cross-origin, so a click was a
-top-level navigation, and the next one replaced it while its headers were still
-in flight — which is how downloads went missing from a batch. Two modes, chosen
-in settings:
+bandwidth. Starts are spaced 1.5s apart, and each link is handed to a hidden
+frame of its own rather than being clicked in the page. Debrid links are
+cross-origin, so a click was a top-level navigation, and the next one replaced
+it while its headers were still in flight — which is how downloads went missing
+from a batch. A frame keeps them independent without opening a tab or taking
+focus. Two modes, chosen in settings:
 
 - **Auto** watches the folder your browser saves into and releases the next
   episode as each file lands, keeping five going. It asks once for the folder
