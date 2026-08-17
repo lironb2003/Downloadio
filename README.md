@@ -2,8 +2,8 @@
 
 A single-page tool that turns a Stremio debrid addon into a season download list.
 Search a series, pick a season, and it probes every episode against your addon,
-picks the best source for each, and hands the links off to JDownloader, aria2, or
-the browser.
+picks the best source for each, and hands the links off to JDownloader or the
+browser.
 
 **Live:** https://lironb2003.github.io/Downloadio/
 
@@ -63,9 +63,6 @@ mode too, so a missed detection never strands the queue.
 
 Episodes that share a file are downloaded once: a two-part finale in a season
 pack is a single `.mkv`, and the queue shows it as one row (`S10E17+E18`).
-
-For a hands-off run, the aria2 export with `-j1` downloads them sequentially
-outside the browser.
 
 ## One source for a whole season
 

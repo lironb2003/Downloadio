@@ -49,7 +49,6 @@ header{
   flex-wrap:wrap;
 }
 .logo img{display:block;height:30px;width:auto}
-.tag{color:var(--ink-faint);font-size:13px;letter-spacing:.02em}
 header .spacer{flex:1}
 .linkbtn{color:var(--ink-dim);font-size:13px;border-bottom:1px solid transparent;padding-bottom:1px}
 .linkbtn:hover{color:var(--ink);border-color:var(--violet)}
@@ -141,6 +140,13 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
 .pip[data-state=none] .q{color:var(--bad)}
 .pip[data-off=true] .bar{background:var(--panel-2);border-color:var(--rule)}
 .pip[data-off=true] .q{color:var(--ink-faint)}
+.stripmore{
+  grid-column:1/-1;margin-top:2px;padding:6px;
+  border:1px dashed var(--rule);border-radius:2px;
+  font-family:"JetBrains Mono",monospace;font-size:11px;letter-spacing:.03em;
+  color:var(--ink-faint);
+}
+.stripmore:hover{border-color:var(--violet-dim);color:var(--ink-dim)}
 /* only a probed episode can be toggled, so only that one looks clickable */
 .pip[data-state=found]{cursor:pointer}
 .pip[data-state=found]:hover .bar{border-color:var(--violet);filter:brightness(1.18)}
@@ -252,7 +258,6 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
 
 <header>
   <div class="logo"><img src="logo/downloadio-logo-horizontal-white.svg" alt="Downloadio" width="140" height="30"></div>
-  <div class="tag">season → link list → download manager</div>
   <div class="spacer"></div>
   <button class="linkbtn" id="cfgToggle">settings</button>
 </header>
@@ -316,8 +321,6 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
 
 <div class="dock" id="dock">
   <div class="count" id="count"></div>
-  <button class="act" id="btnTxt">Save .txt</button>
-  <button class="act" id="btnAria">aria2 input</button>
   <button class="act" id="btnDl">Download</button>
   <button class="act pri" id="btnCopy">Copy links</button>
 </div>
@@ -706,7 +709,7 @@ function renderShow(){
     b.onclick=()=>selectSeason(s);
     sc.appendChild(b);
   });
-  $("#note").innerHTML = `<b>Handing off:</b> keep JDownloader open with clipboard monitoring on and hit <b>Copy links</b> — every episode lands in LinkGrabber at once. For aria2, save the input file and run <span class="mono">aria2c -i downloadio.txt -x8 -j1</span> — <span class="mono">-j1</span> keeps it to one file at a time.<br><b>Download</b> runs five at a time, oldest episode first. On <b>auto</b> it watches your download folder and releases the next as each file lands; on <b>manual</b> you press <b>next</b> yourself. Switch in settings.<br><b>Not cached:</b> episodes whose only sources are marked <span class="mono">⏳</span> stay unchecked — those links return a placeholder file, not the episode, until Real-Debrid has pulled the torrent. Play one in Stremio to start that, then re-pick the season.`;
+  $("#note").innerHTML = `<b>Handing off:</b> keep JDownloader open with clipboard monitoring on and hit <b>Copy links</b> — every episode lands in LinkGrabber at once.<br><b>Download</b> runs five at a time, oldest episode first. On <b>auto</b> it watches your download folder and releases the next as each file lands; on <b>manual</b> you press <b>next</b> yourself. Switch in settings.<br><b>Not cached:</b> episodes whose only sources are marked <span class="mono">⏳</span> stay unchecked — those links return a placeholder file, not the episode, until Real-Debrid has pulled the torrent. Play one in Stremio to start that, then re-pick the season.`;
 }
 
 function selectSeason(s){
@@ -716,7 +719,7 @@ function selectSeason(s){
   document.querySelectorAll("#seasons button").forEach(b=>{
     b.setAttribute("aria-pressed", String(b.textContent === "S"+String(s).padStart(2,"0")));
   });
-  SOURCE = null; SRCOPEN = false;   // sources are per-season
+  SOURCE = null; SRCOPEN = false; STRIP_OPEN = false;   // all per-season
   EPISODES = SHOW.vids.filter(v=>v.season===s)
     .sort((a,b)=>a.episode-b.episode)
     .map(v=>({season:v.season, episode:v.episode, id:v.id, name:v.name||"", state:"idle", all:[], alts:[], pick:null, on:true, open:false, fromSource:false}));
@@ -725,6 +728,9 @@ function selectSeason(s){
 }
 
 /* ---------- the strip ---------- */
+const STRIP_ROWS = 4;      // rows shown before the rest fold away
+let STRIP_OPEN = false;    // per season — a source switch re-renders and keeps it
+
 function renderStrip(){
   const w = $("#stripWrap");
   w.innerHTML = '<div class="strip"></div>';
@@ -737,7 +743,33 @@ function renderStrip(){
     d.onclick = ()=>{ if(e.pick){ e.on=!e.on; syncOne(i); updateDock(); } };
     strip.appendChild(d);
   });
+  const more = document.createElement("button");
+  more.className = "stripmore"; more.id = "stripMore"; more.hidden = true;
+  more.onclick = ()=>{ STRIP_OPEN = !STRIP_OPEN; clipStrip(); };
+  strip.appendChild(more);
+  clipStrip();
 }
+
+// auto-fill decides the column count, so what makes four rows depends on the
+// width — read the resolved tracks back instead of assuming a number.
+function clipStrip(){
+  const strip = document.querySelector(".strip");
+  const btn = $("#stripMore");
+  if(!strip || !btn) return;
+  const tracks = getComputedStyle(strip).gridTemplateColumns;
+  const cols = tracks === "none" ? 0 : tracks.split(" ").filter(Boolean).length;
+  const pips = [...strip.querySelectorAll(".pip")];
+  if(!cols){ btn.hidden = true; return; }
+  const keep = STRIP_ROWS * cols;
+  const over = pips.length > keep;
+  pips.forEach((p,i)=>{ p.hidden = over && !STRIP_OPEN && i >= keep; });
+  btn.hidden = !over;
+  if(over) btn.textContent = STRIP_OPEN ? "▴ show less" : `▾ show ${pips.length - keep} more`;
+}
+
+// a resize changes the column count, so what four rows holds changes with it
+let STRIP_RZ = null;
+addEventListener("resize", ()=>{ clearTimeout(STRIP_RZ); STRIP_RZ = setTimeout(clipStrip, 120); });
 function syncOne(i){
   const e = EPISODES[i];
   const pip = document.querySelectorAll(".pip")[i];
@@ -1018,7 +1050,7 @@ function updateDock(){
 }
 
 function fileName(e){
-  // aria2 treats a slash in out= as a subdirectory — keep it a bare filename
+  // a season pack's title carries a path — the queue matches on the bare name
   if(e.pick.file) return e.pick.file.split(/[\\/]/).pop().replace(/[:*?"<>|]/g,"");
   const safe = (SHOW.name||"Series").replace(/[\\/:*?"<>|]/g,"");
   return `${safe}.S${String(e.season).padStart(2,"0")}E${String(e.episode).padStart(2,"0")}.mkv`;
@@ -1034,20 +1066,6 @@ $("#btnCopy").onclick = async ()=>{
     ta.value=txt; document.body.appendChild(ta); ta.select();
     document.execCommand("copy"); ta.remove(); toast("Links copied");
   }
-};
-
-function save(name, text){
-  const b=new Blob([text],{type:"text/plain"});
-  const a=document.createElement("a");
-  a.href=URL.createObjectURL(b); a.download=name;
-  document.body.appendChild(a); a.click();
-  setTimeout(()=>{URL.revokeObjectURL(a.href); a.remove();},500);
-}
-
-$("#btnTxt").onclick = ()=>{
-  save(`${(SHOW.name||"downloadio").replace(/\s+/g,".")}.S${String(SEASON).padStart(2,"0")}.txt`,
-       selected().map(e=>e.pick.url).join("\n"));
-  toast("Saved");
 };
 
 /* ---------- download queue ----------
@@ -1324,13 +1342,6 @@ function renderQueue(){
 }
 
 $("#btnDl").onclick = ()=>{ startQueue(); };
-
-$("#btnAria").onclick = ()=>{
-  // aria2 input-file format: URL on one line, indented options beneath
-  const body = selected().map(e=>`${e.pick.url}\n  out=${fileName(e)}`).join("\n");
-  save(`${(SHOW.name||"downloadio").replace(/\s+/g,".")}.S${String(SEASON).padStart(2,"0")}.aria2.txt`, body);
-  toast("Run: aria2c -i <file> -x8 -j3");
-};
 </script>
 </body>
 </html>
