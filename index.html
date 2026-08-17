@@ -1062,6 +1062,9 @@ $("#btnTxt").onclick = ()=>{
             (Chrome names them "Unconfirmed 123456.crdownload"), so completion
             keys off each episode's own finished filename appearing.        */
 const QUEUE_KEEP = 5;
+const QUEUE_GAP_MS = 1500;    // cooldown between starts; back-to-back ones get dropped
+const QUEUE_TAB_MS = 6000;    // how long a download tab is left open to get going
+const QUEUE_FRAME_MS = 15000; // ditto for the hidden-frame fallback
 
 const Q = {
   items: [],        // {e, name, state, at, before, got, total}
@@ -1070,7 +1073,8 @@ const Q = {
   dir: null,
   timer: null,
   list: null,       // swappable for testing
-  sawAny: false
+  sawAny: false,
+  filling: false    // qFill is async now, and a tick can land in the middle of one
 };
 
 function qName(e){ return fileName(e); }
@@ -1108,17 +1112,40 @@ async function watchFolder(){
   }catch(err){ Q.dir = null; return false; }
 }
 
+/* Handing the URL to its own browsing context is what keeps a batch intact.
+   The debrid link is cross-origin, so the anchor's download attribute was
+   ignored and a click was a top-level navigation — it downloaded only because
+   the CDN sends Content-Disposition: attachment, and each new click replaced
+   the previous one while its headers were still in flight, which is how
+   downloads went missing. A separate tab (or frame) per URL can't be replaced
+   by its siblings.                                                          */
 function qTrigger(item){
-  // Content-Disposition: attachment means this downloads instead of navigating
-  const a = document.createElement("a");
-  a.href = item.e.pick.url;
-  a.download = item.name;
-  a.rel = "noopener";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
+  const url = item.e.pick.url;
+  if(!qTriggerTab(url)) qTriggerFrame(url);
   item.state = "active";
   item.at = Date.now();
+}
+
+// No noopener here: window.open returns null with it, and the handle is what
+// lets us close the tab. Chrome usually closes it itself once the response
+// turns out to be an attachment; this is the backstop for when it doesn't.
+function qTriggerTab(url){
+  let w = null;
+  try{ w = window.open(url, "_blank"); }catch(err){ return false; }
+  if(!w) return false;                       // popup blocker
+  setTimeout(()=>{ try{ w.close(); }catch(err){} }, QUEUE_TAB_MS);
+  return true;
+}
+
+// Popups are blocked outside a user gesture, so most of a run lands here: a
+// frame navigates independently of the page, giving the same isolation without
+// asking permission. Removal is delayed past the point the download detaches.
+function qTriggerFrame(url){
+  const f = document.createElement("iframe");
+  f.style.display = "none";
+  f.src = url;
+  document.body.appendChild(f);
+  setTimeout(()=>f.remove(), QUEUE_FRAME_MS);
 }
 
 function qActive(){ return Q.items.filter(i=>i.state === "active").length; }
@@ -1138,10 +1165,14 @@ async function qStartNext(){
 }
 
 async function qFill(){
-  while(qActive() < QUEUE_KEEP && qWaiting()){
-    await qStartNext();
-    await sleep(500);        // a tight burst can trip Chrome's multi-download block
-  }
+  if(Q.filling) return;      // a folder tick mustn't start a second run of these
+  Q.filling = true;
+  try{
+    while(qActive() < QUEUE_KEEP && qWaiting()){
+      await qStartNext();
+      if(qActive() < QUEUE_KEEP && qWaiting()) await sleep(QUEUE_GAP_MS);
+    }
+  }finally{ Q.filling = false; }
 }
 
 // Two-parters share one file in a season pack — S10E17 and S10E18 of Friends are
@@ -1176,7 +1207,7 @@ async function startQueue(){
   renderQueue();
   const first = Math.min(QUEUE_KEEP, Q.items.length);
   const shared = Q.episodes - Q.items.length;
-  toast(`Starting ${first} download${first!==1?"s":""}${shared?` · ${Q.episodes} episodes share ${Q.items.length} files`:""} — allow multiple files if the browser asks`);
+  toast(`Starting ${first} download${first!==1?"s":""}${shared?` · ${Q.episodes} episodes share ${Q.items.length} files`:""} — one every ${QUEUE_GAP_MS/1000}s; allow multiple files if the browser asks`);
   await qFill();
   if(Q.mode === "auto") Q.timer = setInterval(qTick, 1500);
 }
