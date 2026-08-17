@@ -165,12 +165,18 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
   display:block;width:100%;text-align:left;margin-bottom:5px;padding:7px 9px;
   border:1px solid var(--rule);border-radius:2px;
   font-family:"JetBrains Mono",monospace;font-size:11.5px;color:var(--ink-dim);
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
 .src:last-child{margin-bottom:0}
 .src:hover{border-color:var(--violet);color:var(--ink)}
 .src.on{border-color:var(--violet);background:var(--panel-2);color:var(--ink)}
 .cov{display:inline-block;min-width:44px;color:var(--ink-faint)}
+/* the release name is the part worth reading, so it wraps onto its own line
+   rather than being clipped — dot-separated names need break-all to wrap */
+.srcname{
+  display:block;margin-top:3px;color:var(--ink-faint);
+  word-break:break-all;line-height:1.4;white-space:normal;
+}
+.src:hover .srcname,.src.on .srcname{color:var(--ink-dim)}
 .cov.full{color:var(--ok)}
 .tbl{margin-top:14px;border:1px solid var(--rule);border-radius:4px;overflow:hidden}
 .ep{
@@ -1003,8 +1009,12 @@ function renderSources(){
     cov.textContent = `${g.count}/${EPISODES.length}`;
     b.appendChild(cov);
     const txt = document.createElement("span");
-    txt.textContent = ` ${g.cached===true?"⚡":g.cached===false?"⏳":"·"} ${g.seeders} seeds · ${g.res?(g.res===2160?"4K":g.res+"p"):"?"} · ~${g.gb.toFixed(2)}GB/ep · ${g.release}`;
+    txt.textContent = ` ${g.cached===true?"⚡":g.cached===false?"⏳":"·"} ${g.seeders} seeds · ${g.res?(g.res===2160?"4K":g.res+"p"):"?"} · ~${g.gb.toFixed(2)}GB/ep`;
     b.appendChild(txt);
+    const name = document.createElement("span");
+    name.className = "srcname";
+    name.textContent = g.release;
+    b.appendChild(name);
     if(g.cached===false) b.title = "Not cached — these links serve a placeholder until Real-Debrid pulls the torrent.";
     b.onclick = ()=>applySource(g.key);
     panel.appendChild(b);
