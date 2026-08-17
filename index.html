@@ -115,18 +115,18 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
   background:var(--panel);border:1px solid var(--rule);border-radius:4px;
 }
 .pip{
-  min-width:0;text-align:center;
+  min-width:0;text-align:center;cursor:default;
   font-family:"JetBrains Mono",monospace;
 }
-.pip .n{font-size:10.5px;color:var(--ink-faint);letter-spacing:.04em}
 .pip .bar{
-  height:22px;margin-top:5px;border-radius:2px;
+  height:32px;border-radius:2px;
   background:var(--panel-2);border:1px solid var(--rule);
   position:relative;overflow:hidden;
+  transition:border-color .12s,background .12s,transform .08s;
 }
 .pip .q{
-  position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
-  font-size:9.5px;font-weight:700;letter-spacing:.02em;color:var(--void);
+  position:absolute;inset:0;z-index:1;display:flex;align-items:center;justify-content:center;
+  font-size:11.5px;font-weight:700;letter-spacing:.02em;color:var(--ink-dim);
 }
 .pip[data-state=probing] .bar{border-color:var(--amber)}
 .pip[data-state=probing] .bar::after{
@@ -136,11 +136,15 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
 }
 @keyframes sweep{from{transform:translateX(-100%)}to{transform:translateX(100%)}}
 .pip[data-state=found] .bar{background:var(--violet);border-color:var(--violet)}
-.pip[data-state=found] .n{color:var(--ink)}
+.pip[data-state=found] .q{color:var(--void)}
 .pip[data-state=none] .bar{border-color:var(--bad);border-style:dashed}
-.pip[data-state=none] .n{color:var(--bad)}
+.pip[data-state=none] .q{color:var(--bad)}
 .pip[data-off=true] .bar{background:var(--panel-2);border-color:var(--rule)}
 .pip[data-off=true] .q{color:var(--ink-faint)}
+/* only a probed episode can be toggled, so only that one looks clickable */
+.pip[data-state=found]{cursor:pointer}
+.pip[data-state=found]:hover .bar{border-color:var(--violet);filter:brightness(1.18)}
+.pip[data-state=found]:active .bar{transform:translateY(1px)}
 
 /* ---- table ---- */
 .tools{display:flex;align-items:center;gap:11px;margin-top:14px}
@@ -728,8 +732,7 @@ function renderStrip(){
   EPISODES.forEach((e,i)=>{
     const d=document.createElement("div");
     d.className="pip"; d.dataset.state=e.state; d.dataset.off = String(!e.on);
-    d.innerHTML = `<div class="n">E${String(e.episode).padStart(2,"0")}</div><div class="bar"><div class="q"></div></div>`;
-    d.querySelector(".q").textContent = e.pick ? (e.pick.res? e.pick.res==2160?"4K":e.pick.res+"p" : "•") : "";
+    d.innerHTML = `<div class="bar"><div class="q">E${String(e.episode).padStart(2,"0")}</div></div>`;
     d.title = e.pick ? e.pick.label : "";
     d.onclick = ()=>{ if(e.pick){ e.on=!e.on; syncOne(i); updateDock(); } };
     strip.appendChild(d);
@@ -740,7 +743,6 @@ function syncOne(i){
   const pip = document.querySelectorAll(".pip")[i];
   if(pip){
     pip.dataset.state = e.state; pip.dataset.off = String(!e.on);
-    pip.querySelector(".q").textContent = e.pick ? (e.pick.res? (e.pick.res==2160?"4K":e.pick.res+"p") : "•") : "";
     pip.title = e.pick ? e.pick.label : "";
   }
   const box = document.querySelector(`.ep[data-i="${i}"] input[type=checkbox]`);
