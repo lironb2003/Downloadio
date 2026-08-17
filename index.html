@@ -110,12 +110,12 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
 
 /* ---- SIGNATURE: the probe strip ---- */
 .strip{
-  display:flex;gap:3px;margin-top:22px;padding:14px 12px 12px;
+  display:grid;grid-template-columns:repeat(auto-fill,minmax(44px,1fr));
+  gap:10px 5px;margin-top:22px;padding:14px 12px 12px;
   background:var(--panel);border:1px solid var(--rule);border-radius:4px;
-  overflow-x:auto;
 }
 .pip{
-  flex:0 0 auto;width:40px;text-align:center;
+  min-width:0;text-align:center;
   font-family:"JetBrains Mono",monospace;
 }
 .pip .n{font-size:10.5px;color:var(--ink-faint);letter-spacing:.04em}
