@@ -789,6 +789,14 @@ function syncOne(i){
 }
 
 /* ---------- probing with bounded concurrency ---------- */
+
+// An episode that still fails after getJSONRetry's own backoff is almost always a
+// dropped request rather than a missing one — re-picking the season by hand used
+// to clear it. So sweep the failures again once the pass is over and nothing else
+// is competing for the addon, waiting longer each round. Only e.err episodes come
+// back: "no debrid-ready source" is an answer, and re-asking never changes it.
+const PROBE_RETRIES = [1500, 4000, 9000];
+
 async function probeSeason(run){
   if(!cfg.addon){
     $("#tblWrap").innerHTML = '<div class="empty">Add your debrid API key in settings first.</div>';
@@ -797,13 +805,30 @@ async function probeSeason(run){
   const b = base(cfg.addon);
   const ctrl = new AbortController();
   ABORT = ctrl;
-  const queue = EPISODES.map((_,i)=>i);
-  const workers = Array.from({length:4}, async ()=>{
-    while(queue.length){
+  let queue = EPISODES.map((_,i)=>i);
+
+  for(let round=0; round<=PROBE_RETRIES.length; round++){
+    const last = round === PROBE_RETRIES.length;
+    if(round){
+      await sleep(PROBE_RETRIES[round-1]);
       if(run !== RUN) return;
-      const i = queue.shift();
+    }
+    await probePass(queue, b, ctrl, run, last);
+    if(run !== RUN) return;
+    queue = EPISODES.map((_,i)=>i).filter(i=>EPISODES[i].err);
+    if(!queue.length) break;
+  }
+  if(run === RUN) renderSources();
+}
+
+async function probePass(queue, b, ctrl, run, last){
+  const todo = queue.slice();
+  const workers = Array.from({length:4}, async ()=>{
+    while(todo.length){
+      if(run !== RUN) return;
+      const i = todo.shift();
       const e = EPISODES[i];
-      e.state = "probing"; syncOne(i);
+      e.state = "probing"; syncOne(i); renderRow(i);
       try{
         const d = await getJSONRetry(`${b}/stream/series/${encodeURIComponent(e.id)}.json`, true, ctrl.signal);
         if(run !== RUN) return;
@@ -813,18 +838,19 @@ async function probeSeason(run){
         e.pick = picks[0] || null;
         e.state = e.pick ? "found" : "none";
         e.on = !!e.pick && e.pick.cached !== false;   // never queue a placeholder
+        e.err = null;                     // a retry round cleared it
       }catch(err){
         if(err.name === "AbortError") return;              // season changed under us
         e.state = "none"; e.on = false;
         // "Failed to fetch" is what a dropped/CORS-less rejection looks like
-        e.err = err.name === "TypeError" ? "addon didn't respond, click the season to retry" : err.message;
+        const msg = err.name === "TypeError" ? "addon didn't respond" : err.message;
+        e.err = last ? `${msg}, click the season to retry` : `${msg} — retrying shortly`;
       }
       if(run !== RUN) return;
       syncOne(i); renderRow(i); renderSources(); updateDock();
     }
   });
   await Promise.all(workers);
-  if(run === RUN) renderSources();
 }
 
 /* ---------- table ---------- */
