@@ -122,6 +122,15 @@ delay them.
   the bytes can't be fetched at all (no CORS, no proxy).
 - `watchFolder()` asks for `readwrite` instead of `read` when subtitles are on,
   because the page writes the `.srt` files into that folder itself.
+- **`Q.dir` is a folder to watch, not a destination.** A page can't redirect a
+  browser download, so the video lands in whatever folder the browser is set to
+  use; only the subtitles are ours to place. Writing them into `Q.dir` puts them
+  beside the episodes *only* when it is that same folder. `subDest()` therefore
+  waits (up to `SUB_CONFIRM_MS`) for `Q.sawAny` — proof a download actually
+  landed there — before trusting it, and otherwise falls back to a normal
+  download so the subtitles follow the videos. The copy-links path skips that
+  check: no queue is running, and JDownloader's own folder is unknowable, so the
+  user's explicit pick is the best guess available.
 
 ## Download queue
 
