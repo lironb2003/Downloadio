@@ -231,6 +231,21 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
 .alt{display:block;width:100%;text-align:left;padding:6px 9px;border:1px solid var(--rule);border-radius:2px;margin-bottom:5px;font-family:"JetBrains Mono",monospace;font-size:11.5px;color:var(--ink-dim);word-break:break-all}
 .alt:hover{border-color:var(--violet);color:var(--ink)}
 
+/* ---- subtitles ---- */
+.langs{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}
+.lang{
+  font-size:12px;padding:4px 9px;border:1px solid var(--rule);border-radius:2px;
+  color:var(--ink-faint);background:transparent;
+}
+.lang:hover{border-color:var(--violet-dim);color:var(--ink-dim)}
+.lang.on{border-color:var(--violet);color:#A38EFF;background:rgba(124,92,255,.09)}
+#langMore{margin-top:8px;display:inline-block}
+.subs{padding:0 13px 11px 68px;background:var(--panel);border-bottom:1px solid var(--rule)}
+.subs .grp{font-size:11.5px;color:var(--ink-faint);margin:4px 0 5px}
+.sub{display:block;width:100%;text-align:left;padding:6px 9px;border:1px solid var(--rule);border-radius:2px;margin-bottom:5px;font-family:"JetBrains Mono",monospace;font-size:11.5px;color:var(--ink-dim);word-break:break-all}
+.sub:hover{border-color:var(--violet);color:var(--ink)}
+.sub.on{border-color:var(--violet);color:#A38EFF}
+
 /* ---- dock ---- */
 .dock{
   position:fixed;left:0;right:0;bottom:0;z-index:10;
@@ -329,6 +344,16 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
     <div class="hint">Auto asks once for the folder your browser saves into and watches for finished files, since browsers don't tell a page when a download completes. Needs Chrome or Edge over https — otherwise it falls back to manual for that run.</div>
   </div>
   <div class="field">
+    <label for="subs">Subtitles</label>
+    <select id="subs">
+      <option value="on">Download subtitles with each episode</option>
+      <option value="off">No subtitles</option>
+    </select>
+    <div class="langs" id="langs"></div>
+    <button class="linkbtn" id="langMore" type="button">more languages…</button>
+    <div class="hint">From OpenSubtitles. Each file is saved next to its episode under the video's own name — <span class="mono">Show.S01E01.1080p.WEB.he.srt</span> — so players load it without being asked. With subtitles on, the folder prompt asks to <em>edit</em> files rather than view them, because the page writes the subtitles there itself.</div>
+  </div>
+  <div class="field">
     <label for="proxy">CORS proxy prefix (optional)</label>
     <input type="text" id="proxy" placeholder="https://your-worker.workers.dev/?u=" spellcheck="false">
     <div class="hint">Only needed if your addon blocks browser requests. The target URL is appended, encoded.</div>
@@ -368,6 +393,12 @@ const $ = s => document.querySelector(s);
 
 const TORRENTIO = "https://torrentio.strem.fun";
 
+// Stremio's official OpenSubtitles addon. Chosen over the OpenSubtitles.com REST
+// API because that one caps free accounts at a handful of downloads per day —
+// useless for a 22-episode season. This speaks the same addon protocol as
+// Cinemeta and Torrentio, needs no key, and has no per-user quota.
+const OPENSUBS = "https://opensubtitles-v3.strem.io";
+
 // Torrentio's option name for each service, with the page that issues the key.
 // Both come from Torrentio's own /configure page.
 const PROVIDERS = [
@@ -380,6 +411,79 @@ const PROVIDERS = [
 ];
 const providerOf = id => PROVIDERS.find(p=>p.id===id) || PROVIDERS[0];
 
+// Subtitle languages. `code` is what the addon sends (OpenSubtitles uses ISO
+// 639-2/B, with its own extras like "pob" for Brazilian Portuguese); `two` is
+// what goes in the filename, because players look for "…he.srt", not "…heb.srt".
+// `alts` catches addons that answer in 2-letter codes or plain English names.
+const LANGS = [
+  {code:"eng", two:"en", name:"English",    alts:["en","english"]},
+  {code:"heb", two:"he", name:"Hebrew",     alts:["he","iw","hebrew"]},
+  {code:"ara", two:"ar", name:"Arabic",     alts:["ar","arabic"]},
+  {code:"spa", two:"es", name:"Spanish",    alts:["es","spanish","esp"]},
+  {code:"fre", two:"fr", name:"French",     alts:["fr","fra","french"]},
+  {code:"ger", two:"de", name:"German",     alts:["de","deu","german"]},
+  {code:"rus", two:"ru", name:"Russian",    alts:["ru","russian"]},
+  {code:"por", two:"pt", name:"Portuguese", alts:["pt","portuguese"]},
+  {code:"pob", two:"pt-BR", name:"Portuguese (BR)", alts:["pt-br","ptbr","brazilian"]},
+  {code:"ita", two:"it", name:"Italian",    alts:["it","italian"]},
+  {code:"dut", two:"nl", name:"Dutch",      alts:["nl","nld","dutch"]},
+  {code:"pol", two:"pl", name:"Polish",     alts:["pl","polish"]},
+  {code:"tur", two:"tr", name:"Turkish",    alts:["tr","turkish"]},
+  {code:"gre", two:"el", name:"Greek",      alts:["el","ell","greek"]},
+  {code:"rum", two:"ro", name:"Romanian",   alts:["ro","ron","romanian"]},
+  {code:"hun", two:"hu", name:"Hungarian",  alts:["hu","hungarian"]},
+  {code:"cze", two:"cs", name:"Czech",      alts:["cs","ces","czech"]},
+  {code:"slo", two:"sk", name:"Slovak",     alts:["sk","slk","slovak"]},
+  {code:"bul", two:"bg", name:"Bulgarian",  alts:["bg","bulgarian"]},
+  {code:"ukr", two:"uk", name:"Ukrainian",  alts:["uk","ukrainian"]},
+  {code:"srp", two:"sr", name:"Serbian",    alts:["sr","scc","serbian"]},
+  {code:"hrv", two:"hr", name:"Croatian",   alts:["hr","scr","croatian"]},
+  {code:"slv", two:"sl", name:"Slovenian",  alts:["sl","slovenian"]},
+  {code:"swe", two:"sv", name:"Swedish",    alts:["sv","swedish"]},
+  {code:"dan", two:"da", name:"Danish",     alts:["da","danish"]},
+  {code:"nor", two:"no", name:"Norwegian",  alts:["no","nob","norwegian"]},
+  {code:"fin", two:"fi", name:"Finnish",    alts:["fi","finnish"]},
+  {code:"ice", two:"is", name:"Icelandic",  alts:["is","isl","icelandic"]},
+  {code:"chi", two:"zh", name:"Chinese",    alts:["zh","zho","zht","zhe","chinese"]},
+  {code:"jpn", two:"ja", name:"Japanese",   alts:["ja","japanese"]},
+  {code:"kor", two:"ko", name:"Korean",     alts:["ko","korean"]},
+  {code:"hin", two:"hi", name:"Hindi",      alts:["hi","hindi"]},
+  {code:"tam", two:"ta", name:"Tamil",      alts:["ta","tamil"]},
+  {code:"tel", two:"te", name:"Telugu",     alts:["te","telugu"]},
+  {code:"ben", two:"bn", name:"Bengali",    alts:["bn","bengali"]},
+  {code:"ind", two:"id", name:"Indonesian", alts:["id","indonesian"]},
+  {code:"may", two:"ms", name:"Malay",      alts:["ms","msa","malay"]},
+  {code:"tha", two:"th", name:"Thai",       alts:["th","thai"]},
+  {code:"vie", two:"vi", name:"Vietnamese", alts:["vi","vietnamese"]},
+  {code:"per", two:"fa", name:"Persian",    alts:["fa","fas","persian","farsi"]}
+];
+const SUB_DEFAULT_LANGS = ["heb","eng"];
+// The languages the settings panel shows before "more languages…" is opened.
+const SUB_COMMON = ["eng","heb","ara","spa","fre","ger","rus","por","ita","tur"];
+
+const LANG_BY_KEY = (()=>{
+  const m = new Map();
+  LANGS.forEach(l=>{
+    m.set(l.code, l);
+    m.set(l.two.toLowerCase(), l);
+    l.alts.forEach(a=>m.set(a, l));
+  });
+  return m;
+})();
+
+// Addons are inconsistent about how they name a language, and the SDK only says
+// "preferably ISO 639-2". Resolve what we recognise; pass anything else through
+// so an unexpected scheme still shows up in the UI instead of vanishing.
+function normLang(raw){
+  const k = String(raw||"").trim().toLowerCase();
+  if(!k) return "";
+  const hit = LANG_BY_KEY.get(k) || LANG_BY_KEY.get(k.replace(/[^a-z-]/g,""));
+  return hit ? hit.code : k.replace(/[^a-z-]/g,"");
+}
+function langOf(code){ return LANG_BY_KEY.get(code) || null; }
+function langName(code){ const l = langOf(code); return l ? l.name : code.toUpperCase(); }
+function langTwo(code){ const l = langOf(code); return l ? l.two : code; }
+
 const cfg = {
   get provider(){ return providerOf(store.get("mf.provider")||"realdebrid").id; },
   get apikey(){ return (store.get("mf.apikey")||"").trim(); },
@@ -388,7 +492,14 @@ const cfg = {
   get proxy(){ return (store.get("mf.proxy")||"").trim(); },
   get dlmode(){ return store.get("mf.dlmode") === "manual" ? "manual" : "auto"; },
   get pref(){ return store.get("mf.pref")||"1080"; },
-  get maxgb(){ return parseFloat(store.get("mf.maxgb")||"6")||0; }
+  get maxgb(){ return parseFloat(store.get("mf.maxgb")||"6")||0; },
+  get subs(){ return store.get("mf.subs") !== "off"; },
+  get sublangs(){
+    // null (never set) means the default pair; "" means the user deselected
+    // every language, which is a deliberate "none" and must not fall back.
+    const v = store.get("mf.sublangs");
+    return v == null ? SUB_DEFAULT_LANGS.slice() : v.split(",").filter(Boolean);
+  }
 };
 
 // Accept a pasted addon URL in the key box: pull the provider and key back out
@@ -487,6 +598,44 @@ $("#pref").value = cfg.pref;
 $("#pref").addEventListener("change",e=>store.set("mf.pref",e.target.value));
 $("#dlmode").value = cfg.dlmode;
 $("#dlmode").addEventListener("change",e=>store.set("mf.dlmode",e.target.value));
+let LANG_ALL = false;   // "more languages…" opened
+
+function renderLangs(){
+  const box = $("#langs");
+  const on = cfg.sublangs;
+  box.innerHTML = "";
+  box.style.display = cfg.subs ? "" : "none";
+  $("#langMore").style.display = cfg.subs ? "" : "none";
+  // collapsed shows the common set plus anything already chosen, so a selection
+  // never hides itself when the list folds back up
+  const show = LANG_ALL ? LANGS : LANGS.filter(l=>SUB_COMMON.includes(l.code) || on.includes(l.code));
+  show.forEach(l=>{
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "lang" + (on.includes(l.code) ? " on" : "");
+    b.textContent = l.name;
+    b.setAttribute("aria-pressed", String(on.includes(l.code)));
+    b.onclick = ()=>{
+      const cur = cfg.sublangs;
+      const next = cur.includes(l.code) ? cur.filter(c=>c!==l.code) : cur.concat(l.code);
+      store.set("mf.sublangs", next.join(","));
+      renderLangs();
+      ensureSubs();
+    };
+    box.appendChild(b);
+  });
+  $("#langMore").textContent = LANG_ALL ? "fewer languages" : "more languages…";
+}
+
+$("#subs").value = cfg.subs ? "on" : "off";
+$("#subs").addEventListener("change", e=>{
+  store.set("mf.subs", e.target.value);
+  renderLangs();
+  ensureSubs();
+});
+$("#langMore").addEventListener("click", ()=>{ LANG_ALL = !LANG_ALL; renderLangs(); });
+renderLangs();
+
 $("#cfgToggle").addEventListener("click",()=>{
   $("#config").classList.toggle("open");
 });
@@ -600,6 +749,76 @@ function pickStreams(list){
     .sort((a,b)=>tier(b)-tier(a) || b.seeders-a.seeders || rank(b)-rank(a));
 }
 
+/* ---------- subtitle scoring ---------- */
+// Source/format tags shared between a release name and a subtitle's name. A
+// subtitle timed for a different rip drifts out of sync, so matching the
+// release we actually picked matters more than how popular the subtitle is.
+const REL_TAGS = /\b(web-?dl|web-?rip|bluray|blu-?ray|bdrip|brrip|hdtv|dvdrip|remux|proper|repack|amzn|nf|dsnp|hmax|atvp|hulu)\b/gi;
+
+function stripExt(s){ return String(s||"").replace(/\.[a-z0-9]{2,4}$/i, ""); }
+function normRelease(s){ return String(s||"").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim(); }
+function relGroup(s){
+  const m = stripExt(s).match(/-\s*([a-z0-9]{2,})$/i);
+  return m ? m[1].toLowerCase() : "";
+}
+function relTags(s){
+  return new Set((String(s||"").match(REL_TAGS) || []).map(t=>t.toLowerCase().replace(/-/g,"")));
+}
+
+function parseSub(s, idx){
+  // The SDK only guarantees id/url/lang; addons add a release or filename under
+  // whichever key they feel like. Take the first one that looks like text.
+  const name = [s.name, s.title, s.SubFileName, s.filename, s.release]
+    .find(v => typeof v === "string" && v.trim()) || "";
+  return {raw:s, id:String(s.id ?? idx), url:s.url, lang:normLang(s.lang), name:name.trim(), idx};
+}
+
+function subRank(sub, e){
+  // Ties fall back to the order the addon returned, which is its own
+  // relevance/download-count ranking — the best guess we have with no metadata.
+  let score = -sub.idx * 0.01;
+  const target = e && e.pick ? (e.pick.release || e.pick.file || "") : "";
+  if(!sub.name || !target) return score;
+
+  const a = normRelease(stripExt(sub.name)), b = normRelease(stripExt(target));
+  if(a && a === b) return score + 1000;               // same release, same timings
+  if(a && b && (a.includes(b) || b.includes(a))) score += 400;
+
+  const g = relGroup(sub.name);
+  if(g && g === relGroup(target)) score += 300;
+
+  const ta = relTags(sub.name), tb = relTags(target);
+  ta.forEach(t=>{ if(tb.has(t)) score += 40; });
+
+  const ra = resOf(sub.name);
+  if(ra && ra === e.pick.res) score += 60;
+  return score;
+}
+
+// Candidates for one language, best first.
+function subsFor(e, code){
+  return e.subs.filter(s=>s.lang === code).sort((a,b)=>subRank(b,e)-subRank(a,e));
+}
+
+// Derived from e.subs, never fetched: e.subs holds every language the addon
+// returned, so changing the language selection re-picks without a new request.
+function pickSubs(e){
+  const pick = {};
+  cfg.sublangs.forEach(code=>{
+    const fixed = e.subFixed[code];
+    if(fixed && e.subs.includes(fixed)){ pick[code] = fixed; return; }
+    const best = subsFor(e, code)[0];
+    if(best) pick[code] = best;
+  });
+  e.subPick = pick;
+  return pick;
+}
+
+function subCount(){
+  if(!cfg.subs) return 0;
+  return selected().reduce((n,e)=>n + Object.keys(e.subPick||{}).length, 0);
+}
+
 /* ---------- state ---------- */
 let SHOW = null;      // {id,name,poster,year}
 let EPISODES = [];    // [{season,episode,id,name,state,alts,pick,on}]
@@ -608,6 +827,7 @@ let RUN = 0;          // cancels stale probe runs
 let ABORT = null;     // ...and drops their in-flight requests
 let SOURCE = null;    // bingeGroup pinned across the whole season
 let SRCOPEN = false;
+let SUBS_RUN = -1;    // the RUN whose subtitles are already fetched
 
 function cancelProbes(){
   if(ABORT) ABORT.abort();
@@ -741,7 +961,7 @@ function renderShow(){
     b.onclick=()=>selectSeason(s);
     sc.appendChild(b);
   });
-  $("#note").innerHTML = `<b>Handing off:</b> keep JDownloader open with clipboard monitoring on and hit <b>Copy links</b> — every episode lands in LinkGrabber at once.<br><b>Download</b> runs five at a time, oldest episode first. On <b>auto</b> it watches your download folder and releases the next as each file lands; on <b>manual</b> you press <b>next</b> yourself. Switch in settings.<br><b>Not cached:</b> episodes whose only sources are marked <span class="mono">⏳</span> stay unchecked — those links return a placeholder file, not the episode, until Real-Debrid has pulled the torrent. Play one in Stremio to start that, then re-pick the season.`;
+  $("#note").innerHTML = `<b>Handing off:</b> keep JDownloader open with clipboard monitoring on and hit <b>Copy links</b> — every episode lands in LinkGrabber at once.<br><b>Download</b> runs five at a time, oldest episode first. On <b>auto</b> it watches your download folder and releases the next as each file lands; on <b>manual</b> you press <b>next</b> yourself. Switch in settings.<br><b>Subtitles</b> ride along with either button — the page saves them itself, named after the video (<span class="mono">…1080p.WEB.he.srt</span>), so players pick them up on their own. <span class="mono">CC</span> chips show what each episode found; click <b>choose subtitles</b> to swap one.<br><b>Not cached:</b> episodes whose only sources are marked <span class="mono">⏳</span> stay unchecked — those links return a placeholder file, not the episode, until Real-Debrid has pulled the torrent. Play one in Stremio to start that, then re-pick the season.`;
 }
 
 function selectSeason(s){
@@ -754,7 +974,8 @@ function selectSeason(s){
   SOURCE = null; SRCOPEN = false; STRIP_OPEN = false;   // all per-season
   EPISODES = SHOW.vids.filter(v=>v.season===s)
     .sort((a,b)=>a.episode-b.episode)
-    .map(v=>({season:v.season, episode:v.episode, id:v.id, name:v.name||"", state:"idle", all:[], alts:[], pick:null, on:true, open:false, fromSource:false}));
+    .map(v=>({season:v.season, episode:v.episode, id:v.id, name:v.name||"", state:"idle", all:[], alts:[], pick:null, on:true, open:false, fromSource:false,
+              subs:[], subPick:{}, subFixed:{}, subState:"idle", subOpen:false}));
   PROBE = null;
   renderStrip(); renderTable(); renderSources(); updateDock(); renderProbe();
   probeSeason(RUN);
@@ -888,6 +1109,63 @@ async function probeSeason(run){
   if(run !== RUN) return;
   setProbe({phase:"done"});
   renderSources();
+  probeSubs(run, ctrl);
+}
+
+// Subtitles are probed in their own pass, after the streams are on screen. The
+// links are the product; a slow or broken subtitle addon must never hold them
+// up. Shares the season's AbortController so a season switch drops these too.
+async function probeSubs(run, ctrl){
+  if(!cfg.subs || !cfg.sublangs.length) return;
+  // turning subtitles on after a season finished probing arrives with no
+  // controller — take over ABORT so a season switch still cancels this pass
+  if(!ctrl){ ctrl = new AbortController(); ABORT = ctrl; }
+  SUBS_RUN = run;
+  const todo = EPISODES.map((_,i)=>i).filter(i=>EPISODES[i].pick);
+  todo.forEach(i=>{ EPISODES[i].subState = "probing"; renderRow(i); });
+
+  const workers = Array.from({length:4}, async ()=>{
+    while(todo.length){
+      if(run !== RUN) return;
+      const i = todo.shift();
+      const e = EPISODES[i];
+      try{
+        const url = `${OPENSUBS}/subtitles/series/${encodeURIComponent(e.id)}.json`;
+        const d = await getJSONRetry(url, true, ctrl.signal);
+        if(run !== RUN) return;
+        e.subs = (d.subtitles||[]).map(parseSub).filter(s=>s.url && s.lang);
+        pickSubs(e);
+        e.subState = Object.keys(e.subPick).length ? "found" : "none";
+      }catch(err){
+        if(err.name === "AbortError") return;
+        e.subs = []; e.subPick = {}; e.subState = "none";
+      }
+      if(run !== RUN) return;
+      renderRow(i); updateDock();
+    }
+  });
+  await Promise.all(workers);
+}
+
+// Turning subtitles on mid-season fetches once; a language change after that is
+// free, because e.subs already holds every language the addon returned.
+function ensureSubs(){
+  if(!EPISODES.length) return;
+  if(cfg.subs && cfg.sublangs.length && SUBS_RUN !== RUN) probeSubs(RUN);
+  else repickSubs();
+}
+
+// A language change only re-derives the picks — nothing goes back to the network.
+function repickSubs(){
+  if(!EPISODES.length) return;
+  EPISODES.forEach((e,i)=>{
+    if(e.subs.length){
+      pickSubs(e);
+      e.subState = Object.keys(e.subPick).length ? "found" : "none";
+    }
+    renderRow(i);
+  });
+  updateDock();
 }
 
 async function probePass(queue, b, ctrl, run, last){
@@ -934,6 +1212,9 @@ function renderTable(){
     const holder=document.createElement("div");
     holder.dataset.alts=i;
     t.appendChild(holder);
+    const shold=document.createElement("div");
+    shold.dataset.subs=i;
+    t.appendChild(shold);
     renderRow(i);
   });
 }
@@ -986,6 +1267,22 @@ function renderRow(i){
       sw.onclick=()=>{ e.open=!e.open; renderRow(i); renderAlts(i); };
       meta.appendChild(sw);
     }
+    if(cfg.subs && cfg.sublangs.length){
+      if(e.subState === "probing"){
+        meta.appendChild(chip("CC …"));
+      }else if(e.subState !== "idle"){
+        cfg.sublangs.forEach(code=>{
+          const got = !!e.subPick[code];
+          meta.appendChild(chip(`CC ${langTwo(code).toUpperCase()}${got?"":" ✗"}`, got, !got));
+        });
+        if(e.subs.length){
+          const sb=document.createElement("button");
+          sb.className="swap"; sb.textContent = e.subOpen ? "hide subtitles" : "choose subtitles";
+          sb.onclick=()=>{ e.subOpen=!e.subOpen; renderRow(i); renderSubs(i); };
+          meta.appendChild(sb);
+        }
+      }
+    }
     body.appendChild(meta);
   } else if(e.state==="none"){
     const f=document.createElement("div"); f.className="file err";
@@ -994,6 +1291,7 @@ function renderRow(i){
   }
   row.appendChild(body);
   renderAlts(i);
+  renderSubs(i);
 }
 
 function chip(txt, v, w){
@@ -1014,6 +1312,40 @@ function renderAlts(i){
     if(a.cached===false) b.title = "Not cached yet — this link serves a placeholder until Real-Debrid finishes downloading it.";
     b.onclick=()=>{ e.pick=a; e.on=true; e.open=false; syncOne(i); renderRow(i); updateDock(); };
     h.appendChild(b);
+  });
+}
+
+function renderSubs(i){
+  const e = EPISODES[i];
+  const h = document.querySelector(`[data-subs="${i}"]`);
+  if(!h) return;
+  h.innerHTML = "";
+  h.className = "";
+  if(!e.subOpen || !e.subs.length) return;
+  h.className = "subs";
+
+  cfg.sublangs.forEach(code=>{
+    const list = subsFor(e, code);
+    const g = document.createElement("div");
+    g.className = "grp";
+    g.textContent = list.length
+      ? `${langName(code)} — saved as .${langTwo(code)}.srt`
+      : `${langName(code)} — none found`;
+    h.appendChild(g);
+
+    list.slice(0,8).forEach(s=>{
+      const b = document.createElement("button");
+      b.className = "sub" + (e.subPick[code] === s ? " on" : "");
+      // addon-supplied text: textContent, never innerHTML
+      b.textContent = s.name || `subtitle ${s.id}`;
+      b.onclick = ()=>{
+        e.subFixed[code] = s;      // a hand-picked one survives a re-pick
+        e.subPick[code] = s;
+        e.subOpen = false;
+        renderRow(i); updateDock();
+      };
+      h.appendChild(b);
+    });
   });
 }
 
@@ -1140,8 +1472,9 @@ function toggleAll(){
 function updateDock(){
   const s = selected();
   const gb = s.reduce((a,e)=>a+(e.pick.gb||0),0);
+  const subs = subCount();
   $("#count").innerHTML = s.length
-    ? `<b>${s.length}</b> episode${s.length!==1?"s":""} queued${gb?` · <b>${gb.toFixed(1)} GB</b>`:""}`
+    ? `<b>${s.length}</b> episode${s.length!==1?"s":""} queued${gb?` · <b>${gb.toFixed(1)} GB</b>`:""}${subs?` · <b>${subs}</b> subtitle${subs!==1?"s":""}`:""}`
     : "";
   $("#dock").classList.toggle("up", s.length>0);
 
@@ -1162,15 +1495,139 @@ function fileName(e){
   return `${safe}.S${String(e.season).padStart(2,"0")}E${String(e.episode).padStart(2,"0")}.mkv`;
 }
 
+// Players load a subtitle automatically only when it sits beside the video under
+// the same name, so the video's own filename is the base and the language goes
+// in last: Show.S01E01.1080p.WEB.mkv -> Show.S01E01.1080p.WEB.he.srt
+function subFileName(e, code, url){
+  const m = String(url||"").match(/\.(vtt|ass|ssa|sub)(?:\?|$)/i);
+  const ext = m ? m[1].toLowerCase() : "srt";
+  const base = fileName(e).replace(/\.[a-z0-9]{2,4}$/i, "");
+  return `${base}.${langTwo(code)}.${ext}`.replace(/[\\/:*?"<>|]/g, "");
+}
+
+/* ---------- saving subtitles ----------
+   Subtitle files are ~50KB from a host that isn't the debrid CDN, so they skip
+   the download queue entirely — none of the spacing or completion-watching the
+   video links need applies to them.
+
+   Unlike a debrid link, we can name these ourselves. Fetching the bytes gives a
+   blob: URL, which is same-origin, so the anchor's download attribute is
+   honoured — the cross-origin iframe hack the queue needs would hand naming
+   back to the server and defeat the whole point.                             */
+const SUB_GAP_MS = 150;    // Chrome's "download multiple files" prompt, not a rate limit
+
+async function fetchSub(url){
+  try{
+    const r = await fetch(url);
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    return await r.blob();
+  }catch(err){
+    if(!cfg.proxy) throw err;
+    const r = await fetch(via(url));
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    return await r.blob();
+  }
+}
+
+// Writing into the watched folder needs readwrite; the queue only ever asked for
+// read. Ask once, and treat a refusal as "fall back to a normal download".
+async function canWriteDir(){
+  if(!Q.dir || !Q.dir.getFileHandle) return false;
+  try{
+    if(await Q.dir.queryPermission({mode:"readwrite"}) === "granted") return true;
+    return await Q.dir.requestPermission({mode:"readwrite"}) === "granted";
+  }catch(err){ return false; }
+}
+
+function blobDownload(blob, name){
+  const u = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = u; a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(()=>URL.revokeObjectURL(u), 30000);
+}
+
+async function saveSub(sub, name, toDir){
+  const blob = await fetchSub(sub.url);
+  if(toDir){
+    const fh = await Q.dir.getFileHandle(name, {create:true});
+    const w = await fh.createWritable();
+    await w.write(blob);
+    await w.close();
+    return;
+  }
+  blobDownload(blob, name);
+}
+
+async function saveSubsFor(eps){
+  if(!cfg.subs) return {done:0, failed:0};
+  const jobs = [];
+  const seen = new Set();
+  eps.forEach(e=>{
+    Object.keys(e.subPick||{}).forEach(code=>{
+      const sub = e.subPick[code];
+      if(!sub) return;
+      const name = subFileName(e, code, sub.url);
+      // two episodes sharing one file (a two-parter in a season pack) share the
+      // video name, so they'd write the same subtitle twice
+      if(seen.has(name)) return;
+      seen.add(name);
+      jobs.push({sub, name});
+    });
+  });
+  if(!jobs.length) return {done:0, failed:0};
+
+  const toDir = await canWriteDir();
+  let done = 0, failed = 0;
+  for(const j of jobs){
+    try{
+      await saveSub(j.sub, j.name, toDir);
+      done++;
+    }catch(err){
+      failed++;
+      // couldn't read the bytes (no CORS, no proxy) — let the browser fetch it
+      // as a navigation instead. It lands under the server's name, not ours.
+      const f = document.createElement("iframe");
+      f.style.display = "none";
+      f.src = j.sub.url;
+      document.body.appendChild(f);
+      setTimeout(()=>f.remove(), QUEUE_FRAME_MS);
+    }
+    if(!toDir) await sleep(SUB_GAP_MS);
+  }
+  return {done, failed};
+}
+
+// One toast for the whole batch — the warning and the count would otherwise
+// overwrite each other inside the toast's 1.9s window.
+function subToast(r){
+  if(!r.done && !r.failed) return;
+  const ok = r.done ? `${r.done} subtitle${r.done!==1?"s":""} saved` : "";
+  const bad = r.failed ? `${r.failed} couldn't be renamed — set a CORS proxy in settings` : "";
+  toast([ok, bad].filter(Boolean).join(" · "));
+}
+
 $("#btnCopy").onclick = async ()=>{
-  const txt = selected().map(e=>e.pick.url).join("\n");
+  const eps = selected();
+  const txt = eps.map(e=>e.pick.url).join("\n");
+  const subs = subCount();
   try{
     await navigator.clipboard.writeText(txt);
-    toast(`${selected().length} links copied`);
+    toast(`${eps.length} links copied${subs?` · saving ${subs} subtitles`:""}`);
   }catch(err){
     const ta=document.createElement("textarea");
     ta.value=txt; document.body.appendChild(ta); ta.select();
     document.execCommand("copy"); ta.remove(); toast("Links copied");
+  }
+  // Subtitle URLs are deliberately not in the clipboard payload: JDownloader
+  // would name them from the server and they'd never match the video. The page
+  // saves them itself — offering the same folder JDownloader writes into, so
+  // they land beside the episodes rather than in the default download folder.
+  if(subs){
+    if(!Q.dir && cfg.dlmode === "auto") await watchFolder();
+    subToast(await saveSubsFor(eps));
   }
 };
 
@@ -1232,7 +1689,10 @@ async function watchFolder(){
   if(Q.dir) return true;
   if(!window.showDirectoryPicker) return false;
   try{
-    Q.dir = await window.showDirectoryPicker({id:"downloadio-downloads", mode:"read", startIn:"downloads"});
+    // read is all the queue watcher needs; subtitles are written into the same
+    // folder, and asking for readwrite up front avoids a second prompt later
+    const mode = cfg.subs ? "readwrite" : "read";
+    Q.dir = await window.showDirectoryPicker({id:"downloadio-downloads", mode, startIn:"downloads"});
     return true;
   }catch(err){ Q.dir = null; return false; }
 }
@@ -1333,6 +1793,9 @@ async function startQueue(){
   toast(`Starting ${first} download${first!==1?"s":""}${shared?` · ${Q.episodes} episodes share ${Q.items.length} files`:""} — one every ${QUEUE_GAP_MS/1000}s; allow multiple files if the browser asks`);
   await qFill();
   if(Q.mode === "auto") Q.timer = setInterval(qTick, 1500);
+  // not awaited: subtitles are tiny and come from another host, so they ride
+  // along beside the videos instead of delaying the first one
+  saveSubsFor(eps).then(subToast);
 }
 
 async function qTick(){
