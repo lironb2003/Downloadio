@@ -341,8 +341,8 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
   <div class="field">
     <label for="dlmode">Downloads</label>
     <select id="dlmode">
-      <option value="auto">Auto — keep 5 going, start the next as each finishes</option>
       <option value="manual">Manual — start 5, release the rest with next</option>
+      <option value="auto">Auto — keep 5 going, start the next as each finishes</option>
     </select>
     <div class="hint">Auto asks once for the folder your browser saves into and watches for finished files, since browsers don't tell a page when a download completes. Pick the folder your browser actually downloads into, not where you want the files — a page can't redirect a download. Needs Chrome or Edge over https — otherwise it falls back to manual for that run.</div>
   </div>
@@ -499,7 +499,7 @@ const cfg = {
   // the addon URL is derived, not stored
   get addon(){ return this.apikey ? `${TORRENTIO}/${this.provider}=${encodeURIComponent(this.apikey)}/manifest.json` : ""; },
   get proxy(){ return (store.get("mf.proxy")||"").trim(); },
-  get dlmode(){ return store.get("mf.dlmode") === "manual" ? "manual" : "auto"; },
+  get dlmode(){ return store.get("mf.dlmode") === "auto" ? "auto" : "manual"; },
   get pref(){ return store.get("mf.pref")||"1080"; },
   get maxgb(){ return parseFloat(store.get("mf.maxgb")||"6")||0; },
   get subs(){ return store.get("mf.subs") !== "off"; },
@@ -999,7 +999,7 @@ function renderShow(){
     b.onclick=()=>selectSeason(s);
     sc.appendChild(b);
   });
-  $("#note").innerHTML = `<b>Handing off:</b> keep JDownloader open with clipboard monitoring on and hit <b>Copy links</b> — every episode lands in LinkGrabber at once.<br><b>Download</b> runs five at a time, oldest episode first. On <b>auto</b> it watches your download folder and releases the next as each file lands; on <b>manual</b> you press <b>next</b> yourself. Switch in settings.<br><b>Subtitles</b> ride along with either button — the page saves them itself, named after the video (<span class="mono">…1080p.WEB.he.srt</span>), so players pick them up on their own. <span class="mono">CC</span> chips show what each episode found; click <b>choose subtitles</b> to swap one.<br><b>Not cached:</b> episodes whose only sources are marked <span class="mono">⏳</span> stay unchecked — those links return a placeholder file, not the episode, until Real-Debrid has pulled the torrent. Play one in Stremio to start that, then re-pick the season.`;
+  $("#note").innerHTML = `<b>Handing off:</b> keep JDownloader open with clipboard monitoring on and hit <b>Copy links</b> — every episode lands in LinkGrabber at once.<br><b>Download</b> runs five at a time, oldest episode first. By default you press <b>next</b> yourself as each finishes; switch to <b>auto</b> in settings to have it watch your download folder and release the next as each file lands.<br><b>Subtitles</b> ride along with either button — the page saves them itself, named after the video (<span class="mono">…1080p.WEB.he.srt</span>), so players pick them up on their own. <span class="mono">CC</span> chips show what each episode found; click <b>choose subtitles</b> to swap one.<br><b>Not cached:</b> episodes whose only sources are marked <span class="mono">⏳</span> stay unchecked — those links return a placeholder file, not the episode, until Real-Debrid has pulled the torrent. Play one in Stremio to start that, then re-pick the season.`;
 }
 
 function selectSeason(s){
