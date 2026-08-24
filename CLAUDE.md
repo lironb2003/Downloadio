@@ -38,6 +38,10 @@ component tree. Rendering is manual: mutate state, then call the matching
 - Cinemeta (`v3-cinemeta.strem.io`) — series search and episode metadata.
 - Torrentio (`torrentio.strem.fun`) — stream lists. The addon URL is *derived*
   from `{provider, apikey}` in `localStorage`, never stored whole (`cfg.addon`).
+- OpenSubtitles v3 (`opensubtitles-v3.strem.io`) — subtitle lists, same addon
+  protocol, no key. Chosen over the OpenSubtitles.com REST API because that one
+  caps free accounts at a handful of downloads per day, which cannot serve a
+  season.
 - Optional user-supplied CORS proxy prefix (`via()`).
 
 **State globals**: `SHOW`, `EPISODES`, `SEASON`, `SOURCE` (a pinned `bingeGroup`),
@@ -56,9 +60,11 @@ bar), `renderQueue()` (download queue panel). `syncOne(i)` is the cheap path tha
 updates just one pip + checkbox without a re-render.
 
 **localStorage keys** are all `mf.*`: `mf.provider`, `mf.apikey`, `mf.proxy`,
-`mf.dlmode`, `mf.pref`, `mf.maxgb`, `mf.recent`. `mf.addon` is a legacy key
-migrated on load. All access goes through the `store` shim, which falls back to an
-in-memory object when `localStorage` throws.
+`mf.dlmode`, `mf.pref`, `mf.maxgb`, `mf.recent`, `mf.subs`, `mf.sublangs`.
+`mf.addon` is a legacy key migrated on load. All access goes through the `store`
+shim, which falls back to an in-memory object when `localStorage` throws.
+`cfg.sublangs` distinguishes `null` (never set → the `heb,eng` default) from `""`
+(the user deselected every language, which must not fall back).
 
 ## Domain rules that are easy to break
 
@@ -80,6 +86,42 @@ changes what users actually get:
   retries; don't collapse it back to `getJSON` for stream calls.
 - Episodes are grouped into season-wide sources by `behaviorHints.bingeGroup`,
   falling back to the infohash in the resolve URL.
+
+## Subtitles
+
+Probed in their own pass (`probeSubs`) *after* `probeSeason` finishes, sharing the
+season's `AbortController` and the same `RUN` guard. It is deliberately separate:
+the stream links are the product, and a slow or broken subtitle addon must never
+delay them.
+
+- `e.subs` holds **every** language the addon returned, unfiltered; `e.subPick` is
+  derived from it by `pickSubs()`. So changing the language selection re-picks with
+  no network request at all. `SUBS_RUN` tracks which `RUN` has already been
+  fetched, so turning subtitles on mid-season fetches exactly once.
+- A hand-picked subtitle goes in `e.subFixed[lang]` and survives a re-pick.
+- `subRank()` scores candidates against the **already-chosen torrent's** release
+  name, because a subtitle timed for a different rip drifts out of sync. When the
+  addon returns no name field, every score ties and it falls back to the addon's
+  own ordering (its download-count ranking) — an upgrade when metadata exists,
+  never a regression when it doesn't.
+- `normLang()` resolves 2-letter codes, English names, and OpenSubtitles' own
+  extras (`pob`) onto one canonical 3-letter code, and passes unknown codes
+  through rather than dropping them. The *filename* uses the 2-letter form —
+  players look for `…he.srt`, not `…heb.srt`.
+- Files are named from `fileName(e)` + `.{two-letter}.srt`, so they sit beside the
+  video under its own name and get loaded automatically. Names are deduped: two
+  episodes sharing one file (a two-parter in a season pack) share a subtitle name.
+- **Subtitles never enter the download queue.** They are ~50KB from a host that
+  isn't the debrid CDN, so none of the queue's spacing or completion-watching
+  applies. `saveSubsFor()` fetches the bytes and then either writes into the
+  watched folder or triggers a blob download.
+- The blob download uses an anchor with `download=`, *not* the queue's hidden
+  iframe. A `blob:` URL is same-origin, so `download` is honoured and the filename
+  is ours; the iframe hack exists only for cross-origin debrid links and would
+  hand naming back to the server. The iframe is the last-resort fallback for when
+  the bytes can't be fetched at all (no CORS, no proxy).
+- `watchFolder()` asks for `readwrite` instead of `read` when subtitles are on,
+  because the page writes the `.srt` files into that folder itself.
 
 ## Download queue
 
