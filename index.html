@@ -382,8 +382,8 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
 
 <div class="dock" id="dock">
   <div class="count" id="count"></div>
-  <button class="act" id="btnDl">Download</button>
-  <button class="act pri" id="btnCopy">Copy links</button>
+  <button class="act" id="btnCopy">Copy links</button>
+  <button class="act pri" id="btnDl">Download</button>
 </div>
 <div class="toast" id="toast"></div>
 
@@ -1422,7 +1422,9 @@ function applySource(key){
   EPISODES.forEach((e,i)=>{
     const a = g.eps.get(i);
     e.fromSource = !!a;
-    if(a){ e.pick = a; e.on = a.cached !== false; }
+    // swapping the source keeps whatever the user ticked — but an uncached pick
+    // still can't ride along, it would download a placeholder instead of the episode
+    if(a){ e.pick = a; e.on = e.on && a.cached !== false; }
   });
   SRCOPEN = false;
   renderStrip(); renderTable(); renderSources(); updateDock();
