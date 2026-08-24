@@ -240,6 +240,9 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
 .lang:hover{border-color:var(--violet-dim);color:var(--ink-dim)}
 .lang.on{border-color:var(--violet);color:#A38EFF;background:rgba(124,92,255,.09)}
 #langMore{margin-top:8px;display:inline-block}
+.subdir{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-top:10px;font-size:12.5px}
+.subdirlabel{color:var(--ink-faint)}
+#subdir{color:#A38EFF;font-size:12px;word-break:break-all}
 .subs{padding:0 13px 11px 68px;background:var(--panel);border-bottom:1px solid var(--rule)}
 .subs .grp{font-size:11.5px;color:var(--ink-faint);margin:4px 0 5px}
 .sub{display:block;width:100%;text-align:left;padding:6px 9px;border:1px solid var(--rule);border-radius:2px;margin-bottom:5px;font-family:"JetBrains Mono",monospace;font-size:11.5px;color:var(--ink-dim);word-break:break-all}
@@ -351,7 +354,13 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
     </select>
     <div class="langs" id="langs"></div>
     <button class="linkbtn" id="langMore" type="button">more languages…</button>
-    <div class="hint">From OpenSubtitles. Each file is saved next to its episode under the video's own name — <span class="mono">Show.S01E01.1080p.WEB.he.srt</span> — so players load it without being asked. With subtitles on, the folder prompt asks to <em>edit</em> files rather than view them, because the page writes the subtitles there itself.<br><b>Want everything in one folder?</b> Point your browser's download location at it (Chrome: <span class="mono">chrome://settings/downloads</span> → Change), then pick that same folder when Downloadio asks. Only the browser decides where a video lands; subtitles follow it.</div>
+    <div class="subdir" id="subdirRow">
+      <span class="subdirlabel">Save subtitles into</span>
+      <span class="mono" id="subdir">your browser's download folder</span>
+      <button class="linkbtn" id="pickdir" type="button">choose…</button>
+      <button class="linkbtn" id="cleardir" type="button">reset</button>
+    </div>
+    <div class="hint">From OpenSubtitles. Each file is saved next to its episode under the video's own name — <span class="mono">Show.S01E01.1080p.WEB.he.srt</span> — so players load it without being asked. With subtitles on, the folder prompt asks to <em>edit</em> files rather than view them, because the page writes the subtitles there itself.<br><b>Want everything in one folder?</b> Choose it above, and point whatever fetches the videos at the same place — Chrome at <span class="mono">chrome://settings/downloads</span> → Change, or JDownloader's own download folder. A page can't redirect a download, so the video always lands where its downloader puts it; the subtitle is the one file this page places itself.</div>
   </div>
   <div class="field">
     <label for="proxy">CORS proxy prefix (optional)</label>
@@ -625,6 +634,7 @@ function renderLangs(){
     box.appendChild(b);
   });
   $("#langMore").textContent = LANG_ALL ? "fewer languages" : "more languages…";
+  if($("#subdirRow")) renderSubDir();
 }
 
 $("#subs").value = cfg.subs ? "on" : "off";
@@ -636,8 +646,36 @@ $("#subs").addEventListener("change", e=>{
 $("#langMore").addEventListener("click", ()=>{ LANG_ALL = !LANG_ALL; renderLangs(); });
 renderLangs();
 
+// Q is a const defined further down, so this runs before it is initialised.
+// `typeof` does not save you there — reading a let/const in its temporal dead
+// zone throws, and an uncaught throw here takes the rest of the config wiring
+// (including the settings toggle) down with it.
+function heldDir(){
+  try{ return Q.dir; }catch(err){ return null; }
+}
+
+function renderSubDir(){
+  const row = $("#subdirRow");
+  row.style.display = (cfg.subs && window.showDirectoryPicker) ? "" : "none";
+  const held = heldDir();
+  const dir = held ? held.name : "";
+  $("#subdir").textContent = dir || "your browser's download folder";
+  $("#cleardir").style.display = dir ? "" : "none";
+}
+$("#pickdir").addEventListener("click", async ()=>{
+  // a click is user activation, which is exactly what the write permission needs
+  if(await watchFolder(true)) toast(`Subtitles will be saved into ${Q.dir.name}`);
+  renderSubDir();
+});
+$("#cleardir").addEventListener("click", ()=>{
+  Q.dir = null; Q.canWrite = false;
+  renderSubDir();
+  toast("Subtitles will follow your browser's download folder");
+});
+
 $("#cfgToggle").addEventListener("click",()=>{
   $("#config").classList.toggle("open");
+  renderSubDir();
 });
 if(!cfg.addon) $("#config").classList.add("open");
 
@@ -1532,25 +1570,18 @@ async function fetchSub(url){
 /* The page cannot choose where a browser download goes. A debrid link is
    cross-origin with no CORS headers, so the video has to be handed to the
    browser's own downloader, which saves it in whatever folder the browser is
-   configured to use. Q.dir is a folder to *watch*, not a destination — writing
-   subtitles into it only puts them beside the videos when it happens to be that
-   same folder. Picking any other folder silently split the two.
+   configured to use — or to JDownloader, which uses its own.
 
-   So: trust Q.dir only once the watcher has actually seen a file land in it.
-   If nothing lands, send the subtitles through a normal download instead, which
-   puts them wherever the browser is putting the videos.                      */
-const SUB_CONFIRM_MS = 30000;   // a temp file shows up seconds after the first start
-
-async function subDest(confirmDir){
-  if(!await canWriteDir()) return false;
-  if(!confirmDir) return true;          // no queue running — honour the explicit pick
-  const until = Date.now() + SUB_CONFIRM_MS;
-  while(Date.now() < until){
-    if(Q.sawAny) return true;
-    if(!Q.timer) break;                 // watcher stopped: nothing more will land
-    await sleep(500);
-  }
-  return false;
+   Subtitles are the one thing this page places itself, so the folder the user
+   picked wins. An earlier version second-guessed that, sending them after the
+   videos whenever the two disagreed; that just moved the files somewhere nobody
+   asked for. Where they went is reported instead, and the folder is changeable
+   from settings.                                                             */
+async function subDest(){
+  if(!Q.dir) return false;
+  if(Q.canWrite) return true;
+  Q.canWrite = await canWriteDir();   // needs a fresh gesture; may legitimately fail
+  return Q.canWrite;
 }
 
 // Writing into the watched folder needs readwrite; the queue only ever asked for
@@ -1585,7 +1616,7 @@ async function saveSub(sub, name, toDir){
   blobDownload(blob, name);
 }
 
-async function saveSubsFor(eps, confirmDir){
+async function saveSubsFor(eps){
   if(!cfg.subs) return {done:0, failed:0};
   const jobs = [];
   const seen = new Set();
@@ -1603,10 +1634,9 @@ async function saveSubsFor(eps, confirmDir){
   });
   if(!jobs.length) return {done:0, failed:0};
 
-  const toDir = await subDest(confirmDir);
-  // picked a folder the downloads aren't going into — say so, it's the one
-  // mistake that quietly leaves subtitles somewhere other than the episodes
-  const split = !toDir && confirmDir && !!Q.dir;
+  const toDir = await subDest();
+  const blocked = !toDir && !!Q.dir;   // folder picked, but not writable
+  const where = toDir ? (Q.dir.name || "the folder you picked") : "";
   let done = 0, failed = 0;
   for(const j of jobs){
     try{
@@ -1624,17 +1654,19 @@ async function saveSubsFor(eps, confirmDir){
     }
     if(!toDir) await sleep(SUB_GAP_MS);
   }
-  return {done, failed, split};
+  return {done, failed, blocked, where};
 }
 
 // One toast for the whole batch — the warning and the count would otherwise
 // overwrite each other inside the toast's 1.9s window.
 function subToast(r){
   if(!r.done && !r.failed) return;
-  const ok = r.done ? `${r.done} subtitle${r.done!==1?"s":""} saved` : "";
-  const where = r.split ? "to your browser's download folder — the folder you picked isn't the one downloads land in" : "";
+  // always say where they went — a subtitle in the wrong folder is invisible
+  const dest = r.where ? `to ${r.where}` : "to your browser's download folder";
+  const ok = r.done ? `${r.done} subtitle${r.done!==1?"s":""} saved ${dest}` : "";
   const bad = r.failed ? `${r.failed} couldn't be renamed — set a CORS proxy in settings` : "";
-  toast([ok, where, bad].filter(Boolean).join(" · "));
+  const no = r.blocked ? "no write access to the folder you picked" : "";
+  toast([ok, no, bad].filter(Boolean).join(" · "));
 }
 
 $("#btnCopy").onclick = async ()=>{
@@ -1653,10 +1685,7 @@ $("#btnCopy").onclick = async ()=>{
   // would name them from the server and they'd never match the video. The page
   // saves them itself — offering the same folder JDownloader writes into, so
   // they land beside the episodes rather than in the default download folder.
-  if(subs){
-    if(!Q.dir && cfg.dlmode === "auto") await watchFolder();
-    subToast(await saveSubsFor(eps));
-  }
+  if(subs) subToast(await saveSubsFor(eps));
 };
 
 /* ---------- download queue ----------
@@ -1682,6 +1711,7 @@ const Q = {
   timer: null,
   list: null,       // swappable for testing
   sawAny: false,
+  canWrite: false,     // readwrite granted on Q.dir, taken at pick time
   filling: false,   // qFill is async now, and a tick can land in the middle of one
   chain: Promise.resolve(),   // every release runs through here, one at a time
   lastAt: 0         // when the last one actually started, for the cooldown
@@ -1713,16 +1743,23 @@ async function qListDir(){
   return {names, sizes};
 }
 
-async function watchFolder(){
-  if(Q.dir) return true;
+// `force` re-opens the picker even when a folder is already held. Without it
+// there was no way to change the folder short of reloading the page: the first
+// pick of a session stuck, and every later download silently reused it.
+async function watchFolder(force){
+  if(Q.dir && !force) return true;
   if(!window.showDirectoryPicker) return false;
   try{
     // read is all the queue watcher needs; subtitles are written into the same
     // folder, and asking for readwrite up front avoids a second prompt later
     const mode = cfg.subs ? "readwrite" : "read";
     Q.dir = await window.showDirectoryPicker({id:"downloadio-downloads", mode, startIn:"downloads"});
+    // Take write access now, while the click that opened the picker still counts
+    // as user activation. requestPermission() is rejected without one, and by the
+    // time the subtitles are saved the queue's spacing has long outlived it.
+    Q.canWrite = cfg.subs ? await canWriteDir() : false;
     return true;
-  }catch(err){ Q.dir = null; return false; }
+  }catch(err){ if(!force) Q.dir = null; return false; }
 }
 
 /* Handing the URL to its own browsing context is what keeps a batch intact.
@@ -1819,11 +1856,14 @@ async function startQueue(){
   const first = Math.min(QUEUE_KEEP, Q.items.length);
   const shared = Q.episodes - Q.items.length;
   toast(`Starting ${first} download${first!==1?"s":""}${shared?` · ${Q.episodes} episodes share ${Q.items.length} files`:""} — one every ${QUEUE_GAP_MS/1000}s; allow multiple files if the browser asks`);
+  // before qFill: its spacing outlives the click's user activation, and asking
+  // for write access after that is rejected
+  if(cfg.subs) await subDest();
   await qFill();
   if(Q.mode === "auto") Q.timer = setInterval(qTick, 1500);
   // not awaited: subtitles are tiny and come from another host, so they ride
   // along beside the videos instead of delaying the first one
-  saveSubsFor(eps, true).then(subToast);
+  saveSubsFor(eps).then(subToast);
 }
 
 async function qTick(){

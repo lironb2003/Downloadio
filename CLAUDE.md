@@ -122,15 +122,26 @@ delay them.
   the bytes can't be fetched at all (no CORS, no proxy).
 - `watchFolder()` asks for `readwrite` instead of `read` when subtitles are on,
   because the page writes the `.srt` files into that folder itself.
-- **`Q.dir` is a folder to watch, not a destination.** A page can't redirect a
-  browser download, so the video lands in whatever folder the browser is set to
-  use; only the subtitles are ours to place. Writing them into `Q.dir` puts them
-  beside the episodes *only* when it is that same folder. `subDest()` therefore
-  waits (up to `SUB_CONFIRM_MS`) for `Q.sawAny` — proof a download actually
-  landed there — before trusting it, and otherwise falls back to a normal
-  download so the subtitles follow the videos. The copy-links path skips that
-  check: no queue is running, and JDownloader's own folder is unknowable, so the
-  user's explicit pick is the best guess available.
+- **`Q.dir` doubles as the subtitle destination, and the user's pick wins.** A
+  page can't redirect a browser download, so the video lands wherever its
+  downloader puts it (the browser's folder, or JDownloader's); the subtitle is
+  the only file this page places itself. An earlier version second-guessed the
+  pick and sent subtitles after the videos whenever the two disagreed — that
+  moved files somewhere nobody chose. `subDest()` now just honours `Q.dir`, and
+  `subToast()` always names where the files went.
+- **Write permission must be taken at pick time.** `requestPermission()` needs
+  user activation, and `saveSubsFor()` runs after `qFill()`, whose
+  `QUEUE_GAP_MS` spacing far outlives the click. `watchFolder()` therefore grabs
+  readwrite immediately after the picker resolves and caches it in `Q.canWrite`;
+  `startQueue()` also resolves it before `qFill()` for a folder held from an
+  earlier run.
+- **`watchFolder(force)` can re-prompt.** Without `force` it returns early when a
+  handle is already held, which meant the first folder picked in a page session
+  stuck for good. The settings control passes `force`.
+- `renderSubDir()` reads `Q.dir` through `heldDir()`, which try/catches the
+  temporal dead zone: the config wiring runs before `const Q` is initialised, and
+  `typeof Q` does *not* guard a TDZ read — it throws, and an uncaught throw there
+  takes the rest of the settings wiring down with it.
 
 ## Download queue
 
