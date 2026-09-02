@@ -4,10 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Downloadio is a single static page (`index.html`, ~1350 lines) that turns a Stremio
-debrid addon into a season download list. Search a series → pick a season → probe
-every episode against the addon → pick the best source per episode → hand the links
-to JDownloader (clipboard) or the browser (download queue).
+Downloadio is a single static page (`index.html`, ~1450 lines) that turns a Stremio
+debrid addon into a download list. Search a movie or series → for a series pick a
+season → probe every item against the addon → pick the best source per item → hand
+the links to JDownloader (clipboard) or the browser (download queue).
+
+A movie is carried as a season of exactly one episode (`loadMovie()`), so probing,
+the alternatives list, subtitles, the dock and the queue all run unchanged. Only
+the addon URL segment, the filename and the surrounding chrome differ.
 
 ## Build / run / deploy
 
@@ -35,7 +39,11 @@ component tree. Rendering is manual: mutate state, then call the matching
 `render*` function.
 
 **External services** (no server side, no API keys in the repo):
-- Cinemeta (`v3-cinemeta.strem.io`) — series search and episode metadata.
+- Cinemeta (`v3-cinemeta.strem.io`) — movie/series search and metadata. Movies and
+  series are separate catalogs, so `search()` asks both (`allSettled`, so one being
+  down still leaves the other useful) and merges. Cinemeta drops requests the same
+  way Torrentio does, so its calls go through `getJSONRetry()` too — a dropped
+  catalog would otherwise read as "this title has no movies".
 - Torrentio (`torrentio.strem.fun`) — stream lists. The addon URL is *derived*
   from `{provider, apikey}` in `localStorage`, never stored whole (`cfg.addon`).
 - OpenSubtitles v3 (`opensubtitles-v3.strem.io`) — subtitle lists, same addon
@@ -44,14 +52,24 @@ component tree. Rendering is manual: mutate state, then call the matching
   season.
 - Optional user-supplied CORS proxy prefix (`via()`).
 
-**State globals**: `SHOW`, `EPISODES`, `SEASON`, `SOURCE` (a pinned `bingeGroup`),
+**State globals**: `SHOW` (`SHOW.type` is `"movie"` or `"series"`; `kind()`/`isMovie()`
+read it), `EPISODES`, `SEASON` (`null` for a movie), `SOURCE` (a pinned `bingeGroup`),
 plus `RUN`/`ABORT` — `RUN` is a monotonic counter that invalidates stale probe
 runs and `ABORT` drops their in-flight fetches. Any code path that leaves a season
 must bump `RUN` and call `cancelProbes()`, or season switches stack live requests.
 
-**Flow**: `search()` → `openShow()` → `renderShow()` → `selectSeason()` →
-`probeSeason()` (4 concurrent workers over the episode list) → per-episode
-`syncOne()` / `renderRow()` / `renderSources()` / `updateDock()`.
+**Flow**: `search()` → `openShow()` → `renderShow()` → `selectSeason()` (or
+`loadMovie()`) → `probeSeason()` (4 concurrent workers over the episode list) →
+per-episode `syncOne()` / `renderRow()` / `renderSources()` / `updateDock()`.
+
+For a movie, `renderShow()` omits the season bar, the pip strip, the tools row and
+the source panel — a single item has nothing for them to act on. Everything that
+would fill them (`renderStrip`, `renderSources`, the `#btnAll` branch of
+`updateDock`) bails on the missing element, so no caller needs a movie check.
+The probe bar, `renderRow`, `fileName()` and `qCode()` do branch: a movie has no
+`SxxExx`, so the row shows the release year and the file is named `Title.2010.mkv`.
+The queue records `item.movie` at build time, because the queue panel outlives the
+open title.
 
 **Render functions and what they own**: `renderStrip()`/`clipStrip()` (the episode
 pip grid, folded to 4 rows), `renderTable()`/`renderRow()`/`renderAlts()` (episode

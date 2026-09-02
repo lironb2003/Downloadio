@@ -333,7 +333,7 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
       </select>
     </div>
     <div class="field">
-      <label for="maxgb">Max size per episode (GB)</label>
+      <label for="maxgb">Max size per file (GB)</label>
       <input type="text" id="maxgb" value="6" spellcheck="false">
     </div>
   </div>
@@ -349,7 +349,7 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
   <div class="field">
     <label for="subs">Subtitles</label>
     <select id="subs">
-      <option value="on">Download subtitles with each episode</option>
+      <option value="on">Download subtitles with each video</option>
       <option value="off">No subtitles</option>
     </select>
     <div class="langs" id="langs"></div>
@@ -360,7 +360,7 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
       <button class="linkbtn" id="pickdir" type="button">choose…</button>
       <button class="linkbtn" id="cleardir" type="button">reset</button>
     </div>
-    <div class="hint">From OpenSubtitles. Each file is saved next to its episode under the video's own name — <span class="mono">Show.S01E01.1080p.WEB.he.srt</span> — so players load it without being asked. With subtitles on, the folder prompt asks to <em>edit</em> files rather than view them, because the page writes the subtitles there itself.<br><b>Want everything in one folder?</b> Choose it above, and point whatever fetches the videos at the same place — Chrome at <span class="mono">chrome://settings/downloads</span> → Change, or JDownloader's own download folder. A page can't redirect a download, so the video always lands where its downloader puts it; the subtitle is the one file this page places itself.</div>
+    <div class="hint">From OpenSubtitles. Each file is saved next to its video under the video's own name — <span class="mono">Show.S01E01.1080p.WEB.he.srt</span> — so players load it without being asked. With subtitles on, the folder prompt asks to <em>edit</em> files rather than view them, because the page writes the subtitles there itself.<br><b>Want everything in one folder?</b> Choose it above, and point whatever fetches the videos at the same place — Chrome at <span class="mono">chrome://settings/downloads</span> → Change, or JDownloader's own download folder. A page can't redirect a download, so the video always lands where its downloader puts it; the subtitle is the one file this page places itself.</div>
   </div>
   <div class="field">
     <label for="proxy">CORS proxy prefix (optional)</label>
@@ -370,7 +370,7 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
 </div>
 
 <div class="searchbar">
-  <input type="text" id="q" placeholder="Search a series…" spellcheck="false">
+  <input type="text" id="q" placeholder="Search a movie or series…" spellcheck="false">
   <button class="go" id="goBtn">Search</button>
 </div>
 
@@ -858,9 +858,13 @@ function subCount(){
 }
 
 /* ---------- state ---------- */
-let SHOW = null;      // {id,name,poster,year}
-let EPISODES = [];    // [{season,episode,id,name,state,alts,pick,on}]
-let SEASON = null;
+// SHOW is whatever title is open — a series or a movie; SHOW.type says which.
+// A movie is carried as a season of exactly one "episode", so probing, the
+// alternatives list, subtitles, the dock and the queue all work unchanged; only
+// the addon URL segment, the filename and the surrounding chrome differ.
+let SHOW = null;      // {id,type,name,poster,year}
+let EPISODES = [];    // [{season,episode,id,name,state,alts,pick,on}] — one entry for a movie
+let SEASON = null;    // null for a movie
 let RUN = 0;          // cancels stale probe runs
 let ABORT = null;     // ...and drops their in-flight requests
 let SOURCE = null;    // bingeGroup pinned across the whole season
@@ -872,7 +876,14 @@ function cancelProbes(){
   ABORT = null;
 }
 
-/* ---------- series cards (search results and recents share this) ---------- */
+// Cinemeta keeps movies and series in separate catalogs and its metas don't
+// reliably carry a type, so the catalog a meta came out of is what tags it.
+// Recents saved before movies existed have no type at all — those are series.
+function metaType(m){ return (m && m.type) === "movie" ? "movie" : "series"; }
+function kind(){ return SHOW && SHOW.type === "movie" ? "movie" : "series"; }
+function isMovie(){ return kind() === "movie"; }
+
+/* ---------- title cards (search results and recents share this) ---------- */
 function showCard(m){
   const b = document.createElement("button");
   b.className = "card";
@@ -882,7 +893,8 @@ function showCard(m){
   const name = document.createElement("b");
   name.textContent = m.name || "";
   const sub = document.createElement("span");
-  sub.textContent = m.releaseInfo || "";
+  // both kinds share the grid, so each card says which it is
+  sub.textContent = [m.releaseInfo || "", metaType(m)==="movie" ? "Movie" : "Series"].filter(Boolean).join(" · ");
   b.append(img, name, sub);
   b.onclick = ()=>openShow(m);
   return b;
@@ -898,10 +910,10 @@ function recents(){
   }catch(err){ return []; }
 }
 
-// only called once a series is actually opened, not merely searched
+// only called once a title is actually opened, not merely searched
 function rememberShow(m){
   if(!m || !m.id) return;
-  const entry = {id:m.id, name:m.name||"", poster:m.poster||"", releaseInfo:m.releaseInfo||""};
+  const entry = {id:m.id, type:metaType(m), name:m.name||"", poster:m.poster||"", releaseInfo:m.releaseInfo||""};
   const list = [entry, ...recents().filter(x=>x.id !== entry.id)].slice(0, RECENT_MAX);
   store.set("mf.recent", JSON.stringify(list));
   renderRecent();
@@ -918,38 +930,73 @@ function renderRecent(){
   list.forEach(m => grid.appendChild(showCard(m)));
 }
 
-/* ---------- search ---------- */
+/* ---------- search ----------
+   Movies and series live in separate Cinemeta catalogs, so a search asks both.
+   Each answers in its own relevance order, which says nothing about the other's,
+   so titles matching what was typed float to the front and the rest interleave
+   by position — one kind can never crowd the other out of the first row.
+   allSettled, not all: one catalog being down still leaves the other useful. */
+const SEARCH_MAX = 12;
+const SEARCH_KINDS = ["series", "movie"];
+
+function titleScore(name, q){
+  const a = String(name||"").toLowerCase().trim(), b = q.toLowerCase();
+  if(!a || !b) return 0;
+  return a === b ? 2 : a.startsWith(b) ? 1 : 0;
+}
+
 async function search(){
   const q = $("#q").value.trim();
   if(!q) return;
-  RUN++; cancelProbes();   // leaving the show: stop probing it
+  RUN++; cancelProbes();   // leaving the title: stop probing it
   $("#stage").innerHTML = '<div class="empty">Searching…</div>';
   renderRecent();
-  try{
-    const d = await getJSON(`${CINEMETA}/catalog/series/top/search=${encodeURIComponent(q)}.json`);
-    const metas = (d.metas||[]).slice(0,12);
-    if(!metas.length){ $("#stage").innerHTML = '<div class="empty">No series matched. Try the original-language title.</div>'; return; }
-    $("#stage").innerHTML = '<div class="results"></div>';
-    const grid = $("#stage .results");
-    metas.forEach(m=>grid.appendChild(showCard(m)));
-  }catch(e){
-    $("#stage").innerHTML = `<div class="empty err">Search failed — ${e.message}. If this keeps happening, run this page from a real host rather than a preview frame.</div>`;
+  // Cinemeta drops requests the same way Torrentio does — a bare "Failed to
+  // fetch" with no status. One dropped catalog would silently mean "there are no
+  // movies for this", which is indistinguishable from a real empty result, so
+  // these go through the retry path rather than plain getJSON.
+  const got = await Promise.allSettled(SEARCH_KINDS.map(t =>
+    getJSONRetry(`${CINEMETA}/catalog/${t}/top/search=${encodeURIComponent(q)}.json`)));
+  if(got.every(r => r.status === "rejected")){
+    const err = got[0].reason || {};
+    $("#stage").innerHTML = `<div class="empty err">Search failed — ${err.message||"no response"}. If this keeps happening, run this page from a real host rather than a preview frame.</div>`;
+    return;
   }
+  const metas = got
+    .flatMap((r, n) => (r.status === "fulfilled" ? (r.value.metas||[]) : [])
+      // the catalog that answered is what the meta is, whatever the meta says
+      .map((m, i) => Object.assign({}, m, {type:SEARCH_KINDS[n], rank:i})))
+    .sort((a,b) => titleScore(b.name,q) - titleScore(a.name,q) || a.rank - b.rank)
+    .slice(0, SEARCH_MAX);
+  if(!metas.length){ $("#stage").innerHTML = '<div class="empty">Nothing matched. Try the original-language title.</div>'; return; }
+  $("#stage").innerHTML = '<div class="results"></div>';
+  const grid = $("#stage .results");
+  metas.forEach(m=>grid.appendChild(showCard(m)));
 }
 $("#goBtn").onclick = search;
 $("#q").addEventListener("keydown", e => { if(e.key==="Enter") search(); });
 renderRecent();   // the markup above this script is already parsed
 
-/* ---------- open a show ---------- */
+/* ---------- open a title (series or movie) ---------- */
 async function openShow(m){
-  $("#stage").innerHTML = '<div class="empty">Loading episodes…</div>';
+  const type = metaType(m);
+  // a card can be clicked while the last title is still probing
+  RUN++; cancelProbes();
+  $("#stage").innerHTML = `<div class="empty">${type==="movie" ? "Loading movie…" : "Loading episodes…"}</div>`;
   renderRecent();
   try{
-    const d = await getJSON(`${CINEMETA}/meta/series/${m.id}.json`);
+    // same dropped-request problem as the catalogs above
+    const d = await getJSONRetry(`${CINEMETA}/meta/${type}/${m.id}.json`);
     const meta = d.meta || {};
-    SHOW = {id:m.id, name:meta.name||m.name, poster:meta.poster||m.poster, year:meta.releaseInfo||m.releaseInfo||""};
+    SHOW = {id:m.id, type, name:meta.name||m.name, poster:meta.poster||m.poster,
+            year:meta.releaseInfo||m.releaseInfo||"", runtime:meta.runtime||"", vids:[], seasons:[]};
     // opened, not just searched — and meta gives a better poster/title than the card did
-    rememberShow({id:SHOW.id, name:SHOW.name, poster:SHOW.poster, releaseInfo:SHOW.year});
+    rememberShow({id:SHOW.id, type, name:SHOW.name, poster:SHOW.poster, releaseInfo:SHOW.year});
+    if(type === "movie"){
+      renderShow();
+      loadMovie();
+      return;
+    }
     const vids = (meta.videos||[]).filter(v=>v.season>0 && v.episode>0);
     const seasons = [...new Set(vids.map(v=>v.season))].sort((a,b)=>a-b);
     SHOW.vids = vids;
@@ -957,11 +1004,15 @@ async function openShow(m){
     renderShow();
     if(seasons.length) selectSeason(seasons[0]);
   }catch(e){
-    $("#stage").innerHTML = `<div class="empty err">Couldn't load that series — ${e.message}</div>`;
+    $("#stage").innerHTML = `<div class="empty err">Couldn't load that ${type==="movie"?"movie":"series"} — ${e.message}</div>`;
   }
 }
 
 function renderShow(){
+  // A movie is one row: the season bar, the pip strip, "select all" and the
+  // season-wide source picker all have nothing to act on, so they aren't built.
+  // The functions that would fill them all bail on a missing element.
+  const movie = isMovie();
   $("#stage").innerHTML = `
     <div class="showhead">
       <img alt="" src="${SHOW.poster||""}">
@@ -970,26 +1021,30 @@ function renderShow(){
         <p></p>
       </div>
     </div>
-    <div class="seasons" id="seasons"></div>
-    <div id="stripWrap"></div>
+    ${movie ? "" : '<div class="seasons" id="seasons"></div>\n    <div id="stripWrap"></div>'}
     <div class="probe" id="probe" hidden>
       <span class="pdot"></span>
       <div class="ptrack"><div class="pfill" id="pfill"></div></div>
       <div class="ptext" id="ptext"></div>
     </div>
-    <div class="tools" id="tools">
+    ${movie ? "" : `<div class="tools" id="tools">
       <button class="tool" id="btnAll">select all</button>
       <button class="tool" id="btnSrc">one source for all…</button>
       <span class="tnote" id="tnote"></span>
       <span class="srcnote" id="srcnote"></span>
     </div>
-    <div id="srcPanel"></div>
+    <div id="srcPanel"></div>`}
     <div id="tblWrap"></div>
     <div class="note" id="note"></div>
   `;
+  $(".showhead h1").textContent = SHOW.name;
+  if(movie){
+    $(".showhead p").textContent = [SHOW.year, SHOW.runtime, SHOW.id].filter(Boolean).join(" · ");
+    $("#note").innerHTML = `<b>Handing off:</b> keep JDownloader open with clipboard monitoring on and hit <b>Copy links</b>, or press <b>Download</b> to hand the link to the browser.<br><b>Sources:</b> the best-seeded cached release is picked for you — click <b>other sources</b> on the row to take a different one.<br><b>Subtitles</b> ride along with either button — the page saves them itself, named after the video (<span class="mono">…1080p.WEB.he.srt</span>), so players pick them up on their own. <span class="mono">CC</span> chips show what was found; click <b>choose subtitles</b> to swap one.<br><b>Not cached:</b> a source marked <span class="mono">⏳</span> stays unchecked — that link returns a placeholder file, not the movie, until Real-Debrid has pulled the torrent. Play it in Stremio once to start that, then re-open it here.`;
+    return;
+  }
   $("#btnAll").onclick = toggleAll;
   $("#btnSrc").onclick = ()=>{ SRCOPEN = !SRCOPEN; renderSources(); };
-  $(".showhead h1").textContent = SHOW.name;
   $(".showhead p").textContent = `${SHOW.year} · ${SHOW.id} · ${SHOW.seasons.length} season${SHOW.seasons.length!==1?"s":""}`;
   const sc = $("#seasons");
   SHOW.seasons.forEach(s=>{
@@ -1019,12 +1074,30 @@ function selectSeason(s){
   probeSeason(RUN);
 }
 
+// The movie counterpart of selectSeason: one EPISODES entry, and everything
+// downstream — probing, alternatives, subtitles, dock, queue — runs unchanged.
+// season/episode stay 0 so nothing that sorts or groups by them misbehaves;
+// the places that would print an SxxExx code check isMovie() instead.
+function loadMovie(){
+  SEASON = null;
+  RUN++;
+  cancelProbes();
+  SOURCE = null; SRCOPEN = false; STRIP_OPEN = false;
+  EPISODES = [{season:0, episode:0, id:SHOW.id, name:SHOW.name||"", state:"idle", all:[], alts:[], pick:null,
+               on:true, open:false, fromSource:false,
+               subs:[], subPick:{}, subFixed:{}, subState:"idle", subOpen:false}];
+  PROBE = null;
+  renderTable(); updateDock(); renderProbe();
+  probeSeason(RUN);
+}
+
 /* ---------- the strip ---------- */
 const STRIP_ROWS = 4;      // rows shown before the rest fold away
 let STRIP_OPEN = false;    // per season — a source switch re-renders and keeps it
 
 function renderStrip(){
   const w = $("#stripWrap");
+  if(!w) return;    // a movie has no strip to draw
   w.innerHTML = '<div class="strip"></div>';
   const strip = w.querySelector(".strip");
   EPISODES.forEach((e,i)=>{
@@ -1099,22 +1172,28 @@ function renderProbe(){
   const settled = EPISODES.filter(e=>e.state !== "idle" && e.state !== "probing").length;
   const fill = $("#pfill"), txt = $("#ptext");
 
+  // a movie is a list of one, where "3 of 22 ready" reads as nonsense
+  const one = total === 1;
+
   if(PROBE.phase === "probe"){
     fill.style.width = (settled/total*100).toFixed(1) + "%";
-    txt.textContent = `probing · ${settled} / ${total}`;
+    txt.textContent = one ? "probing sources…" : `probing · ${settled} / ${total}`;
   }else if(PROBE.phase === "retry"){
     // e.err survives until a round succeeds, so it counts what's still outstanding
     const left = EPISODES.filter(e=>e.err).length;
     fill.style.width = "100%";
-    txt.textContent = `retrying ${left} episode${left!==1?"s":""} · attempt ${PROBE.round+1} of ${PROBE_TRIES}`;
+    txt.textContent = (one ? "retrying" : `retrying ${left} episode${left!==1?"s":""}`)
+                    + ` · attempt ${PROBE.round+1} of ${PROBE_TRIES}`;
   }else{
     const found = EPISODES.filter(e=>e.state === "found").length;
     const failed = EPISODES.filter(e=>e.err).length;
     const empty = total - found - failed;
     fill.style.width = "100%";
-    txt.textContent = [`done · ${found} of ${total} ready`,
-                       empty ? `${empty} without a source` : "",
-                       failed ? `${failed} still unreachable` : ""].filter(Boolean).join(" · ");
+    txt.textContent = one
+      ? (found ? "done · source ready" : failed ? "done · addon unreachable" : "done · no source found")
+      : [`done · ${found} of ${total} ready`,
+         empty ? `${empty} without a source` : "",
+         failed ? `${failed} still unreachable` : ""].filter(Boolean).join(" · ");
   }
 }
 
@@ -1125,6 +1204,9 @@ async function probeSeason(run){
     return;
   }
   const b = base(cfg.addon);
+  // read once: a retry round can outlive the title it started on, and the RUN
+  // guard that stops it only fires between awaits
+  const type = kind();
   const ctrl = new AbortController();
   ABORT = ctrl;
   let queue = EPISODES.map((_,i)=>i);
@@ -1139,7 +1221,7 @@ async function probeSeason(run){
       await sleep(PROBE_RETRIES[round-1]);
       if(run !== RUN) return;
     }
-    await probePass(queue, b, ctrl, run, last);
+    await probePass(queue, b, type, ctrl, run, last);
     if(run !== RUN) return;
     queue = EPISODES.map((_,i)=>i).filter(i=>EPISODES[i].err);
     if(!queue.length) break;
@@ -1158,6 +1240,7 @@ async function probeSubs(run, ctrl){
   // turning subtitles on after a season finished probing arrives with no
   // controller — take over ABORT so a season switch still cancels this pass
   if(!ctrl){ ctrl = new AbortController(); ABORT = ctrl; }
+  const type = kind();
   SUBS_RUN = run;
   const todo = EPISODES.map((_,i)=>i).filter(i=>EPISODES[i].pick);
   todo.forEach(i=>{ EPISODES[i].subState = "probing"; renderRow(i); });
@@ -1168,7 +1251,7 @@ async function probeSubs(run, ctrl){
       const i = todo.shift();
       const e = EPISODES[i];
       try{
-        const url = `${OPENSUBS}/subtitles/series/${encodeURIComponent(e.id)}.json`;
+        const url = `${OPENSUBS}/subtitles/${type}/${encodeURIComponent(e.id)}.json`;
         const d = await getJSONRetry(url, true, ctrl.signal);
         if(run !== RUN) return;
         e.subs = (d.subtitles||[]).map(parseSub).filter(s=>s.url && s.lang);
@@ -1206,7 +1289,7 @@ function repickSubs(){
   updateDock();
 }
 
-async function probePass(queue, b, ctrl, run, last){
+async function probePass(queue, b, type, ctrl, run, last){
   const todo = queue.slice();
   const workers = Array.from({length:4}, async ()=>{
     while(todo.length){
@@ -1215,7 +1298,7 @@ async function probePass(queue, b, ctrl, run, last){
       const e = EPISODES[i];
       e.state = "probing"; syncOne(i); renderRow(i);
       try{
-        const d = await getJSONRetry(`${b}/stream/series/${encodeURIComponent(e.id)}.json`, true, ctrl.signal);
+        const d = await getJSONRetry(`${b}/stream/${type}/${encodeURIComponent(e.id)}.json`, true, ctrl.signal);
         if(run !== RUN) return;
         const picks = pickStreams(d.streams||[]);
         e.all = picks;                    // full list — a season pack may miss the top 8
@@ -1264,21 +1347,26 @@ function renderRow(i){
   row.className = "ep" + (e.pick ? "" : " miss");
   row.innerHTML = "";
 
+  const movie = isMovie();
+
   const cb=document.createElement("input");
   cb.type="checkbox"; cb.checked=e.on; cb.disabled=!e.pick;
-  cb.setAttribute("aria-label",`Include episode ${e.episode}`);
+  cb.setAttribute("aria-label", movie ? "Include this movie" : `Include episode ${e.episode}`);
   cb.onchange=()=>{ e.on=cb.checked; syncOne(i); updateDock(); };
   row.appendChild(cb);
 
   const code=document.createElement("div");
   code.className="code";
-  code.textContent = `S${String(e.season).padStart(2,"0")}E${String(e.episode).padStart(2,"0")}`;
+  // a movie has no SxxExx — the release year is the equivalent short marker
+  code.textContent = movie ? (SHOW.year || "film")
+                           : `S${String(e.season).padStart(2,"0")}E${String(e.episode).padStart(2,"0")}`;
   row.appendChild(code);
 
   const body=document.createElement("div");
   body.className="body";
   const ttl=document.createElement("div");
-  ttl.className="title"; ttl.textContent = e.name || `Episode ${e.episode}`;
+  ttl.className="title";
+  ttl.textContent = e.name || (movie ? (SHOW.name||"Movie") : `Episode ${e.episode}`);
   body.appendChild(ttl);
 
   if(e.state==="probing"){
@@ -1513,8 +1601,9 @@ function updateDock(){
   const s = selected();
   const gb = s.reduce((a,e)=>a+(e.pick.gb||0),0);
   const subs = subCount();
+  const noun = isMovie() ? "movie" : "episode";
   $("#count").innerHTML = s.length
-    ? `<b>${s.length}</b> episode${s.length!==1?"s":""} queued${gb?` · <b>${gb.toFixed(1)} GB</b>`:""}${subs?` · <b>${subs}</b> subtitle${subs!==1?"s":""}`:""}`
+    ? `<b>${s.length}</b> ${noun}${s.length!==1?"s":""} queued${gb?` · <b>${gb.toFixed(1)} GB</b>`:""}${subs?` · <b>${subs}</b> subtitle${subs!==1?"s":""}`:""}`
     : "";
   $("#dock").classList.toggle("up", s.length>0);
 
@@ -1531,7 +1620,13 @@ function updateDock(){
 function fileName(e){
   // a season pack's title carries a path — the queue matches on the bare name
   if(e.pick.file) return e.pick.file.split(/[\\/]/).pop().replace(/[:*?"<>|]/g,"");
-  const safe = (SHOW.name||"Series").replace(/[\\/:*?"<>|]/g,"");
+  const safe = (SHOW.name || (isMovie()?"Movie":"Series")).replace(/[\\/:*?"<>|]/g,"");
+  // a movie is named the way players expect one: Title.2010.mkv, no SxxExx.
+  // releaseInfo can read "2010" or "2010–2012", so take the first year out of it.
+  if(isMovie()){
+    const yr = (String(SHOW.year||"").match(/\d{4}/)||[])[0];
+    return `${safe}${yr?"."+yr:""}.mkv`;
+  }
   return `${safe}.S${String(e.season).padStart(2,"0")}E${String(e.episode).padStart(2,"0")}.mkv`;
 }
 
@@ -1677,7 +1772,7 @@ $("#btnCopy").onclick = async ()=>{
   const subs = subCount();
   try{
     await navigator.clipboard.writeText(txt);
-    toast(`${eps.length} links copied${subs?` · saving ${subs} subtitles`:""}`);
+    toast(`${eps.length} link${eps.length!==1?"s":""} copied${subs?` · saving ${subs} subtitle${subs!==1?"s":""}`:""}`);
   }catch(err){
     const ta=document.createElement("textarea");
     ta.value=txt; document.body.appendChild(ta); ta.select();
@@ -1830,7 +1925,9 @@ function qBuild(eps){
   eps.forEach(e=>{
     const hit = byUrl.get(e.pick.url);
     if(hit){ hit.eps.push(e); return; }
-    const item = {eps:[e], e, name:qName(e), state:"waiting", at:0, before:new Set(), got:0, total:(e.pick.gb||0)*1024*1024*1024};
+    // the queue panel outlives the open title, so what kind it was is recorded
+    // here rather than read back off SHOW when the row is drawn
+    const item = {eps:[e], e, name:qName(e), movie:isMovie(), state:"waiting", at:0, before:new Set(), got:0, total:(e.pick.gb||0)*1024*1024*1024};
     byUrl.set(e.pick.url, item);
     items.push(item);
   });
@@ -1838,6 +1935,7 @@ function qBuild(eps){
 }
 
 function qCode(item){
+  if(item.movie) return "movie";
   const season = String(item.eps[0].season).padStart(2,"0");
   return "S" + season + item.eps.map(e=>"E"+String(e.episode).padStart(2,"0")).join("+");
 }
@@ -1857,7 +1955,10 @@ async function startQueue(){
   renderQueue();
   const first = Math.min(QUEUE_KEEP, Q.items.length);
   const shared = Q.episodes - Q.items.length;
-  toast(`Starting ${first} download${first!==1?"s":""}${shared?` · ${Q.episodes} episodes share ${Q.items.length} files`:""} — one every ${QUEUE_GAP_MS/1000}s; allow multiple files if the browser asks`);
+  // the spacing and the browser's multi-file prompt only exist for a batch
+  toast(Q.items.length === 1
+    ? "Starting the download — it lands wherever your browser saves files"
+    : `Starting ${first} download${first!==1?"s":""}${shared?` · ${Q.episodes} episodes share ${Q.items.length} files`:""} — one every ${QUEUE_GAP_MS/1000}s; allow multiple files if the browser asks`);
   // before qFill: its spacing outlives the click's user activation, and asking
   // for write access after that is rejected
   if(cfg.subs) await subDest();
@@ -1938,7 +2039,10 @@ function renderQueue(){
   }else{
     mode.textContent = cfg.dlmode === "auto"
       ? "Couldn't watch a folder, so this run is manual — press next as each download finishes."
-      : `Started ${Math.min(QUEUE_KEEP, Q.items.length)} — press next as each download finishes.`;
+      : Q.items.length === 1
+        // nothing is queued behind it, so there is no "next" to press
+        ? "Handed to your browser — it saves it wherever downloads go."
+        : `Started ${Math.min(QUEUE_KEEP, Q.items.length)} — press next as each download finishes.`;
   }
   box.appendChild(mode);
 
