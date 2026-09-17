@@ -408,6 +408,33 @@ const TORRENTIO = "https://torrentio.strem.fun";
 // Cinemeta and Torrentio, needs no key, and has no per-user quota.
 const OPENSUBS = "https://opensubtitles-v3.strem.io";
 
+// The addon answers with every language at once, but OpenSubtitles truncates
+// that answer at ~100 rows in its own relevance order, and a language with few
+// uploads falls off the end: Interstellar comes back with 98 subtitles across
+// 26 languages and not one of the 8 Hebrew ones that exist. The legacy REST
+// search is the same catalogue with the language as a query parameter, so a
+// language that got cut off can be asked for on its own. It sends
+// Access-Control-Allow-Origin: *, so it needs no proxy and no key — but it
+// takes exactly one language per request, hence the per-language fill pass.
+const OPENSUBS_REST = "https://rest.opensubtitles.org/search";
+// Downloads keep going through Stremio's mirror: it serves the file as UTF-8
+// text with CORS headers, while dl.opensubtitles.org hands back a gzipped body
+// from an origin the page can't read. The id in the path is IDSubtitleFile —
+// not IDSubtitle, which is the other number in the same record.
+const OPENSUBS_DL = "https://subs5.strem.io/en/download/subencoding-stremio-utf8/src-api/file/";
+// OpenSubtitles predates the ISO 639-2/B codes we canonicalise to for these
+// two, and rejects the modern spelling outright rather than mapping it.
+const OS_LANG = {gre:"ell", srp:"scc"};
+// Fewer than this in the addon's answer is the truncation above, not the real
+// catalogue — ask REST for that language directly.
+const SUB_THIN = 3;
+// So is an answer where nothing fits the torrent we picked. Interstellar comes
+// back with four English subtitles and all four are cam rips; REST's answer for
+// that same language holds 41, the BluRay ones among them. 40 is one shared
+// release tag on subRank()'s scale — below it, not one candidate agrees with
+// our pick on a tag, a group or a resolution.
+const SUB_MATCH = 40;
+
 // Torrentio's option name for each service, with the page that issues the key.
 // Both come from Torrentio's own /configure page.
 const PROVIDERS = [
@@ -806,9 +833,26 @@ function relTags(s){
 function parseSub(s, idx){
   // The SDK only guarantees id/url/lang; addons add a release or filename under
   // whichever key they feel like. Take the first one that looks like text.
-  const name = [s.name, s.title, s.SubFileName, s.filename, s.release]
+  // opensubtitles-v3 spells them subtitleFileName/movieReleaseName and it is the
+  // only subtitle addon wired up here, so leaving those two out left every
+  // candidate nameless — and subRank() below scoring them all identically.
+  const name = [s.name, s.title, s.SubFileName, s.subtitleFileName,
+                s.filename, s.release, s.movieReleaseName]
     .find(v => typeof v === "string" && v.trim()) || "";
   return {raw:s, id:String(s.id ?? idx), url:s.url, lang:normLang(s.lang), name:name.trim(), idx};
+}
+
+// The same shape from a REST row. Its download link is built from the mirror
+// rather than taken from the record, and the format is a field of its own —
+// OpenSubtitles carries .ass alongside .srt and the URL doesn't say which.
+function parseRestSub(s, idx){
+  const name = [s.SubFileName, s.MovieReleaseName]
+    .find(v => typeof v === "string" && v.trim()) || "";
+  const fmt = String(s.SubFormat||"").toLowerCase();
+  return {raw:s, id:String(s.IDSubtitleFile || idx),
+          url: s.IDSubtitleFile ? OPENSUBS_DL + s.IDSubtitleFile : "",
+          lang: normLang(s.SubLanguageID), name: name.trim(),
+          ext: fmt === "ssa" ? "ass" : (/^(ass|sub|vtt)$/.test(fmt) ? fmt : "srt"), idx};
 }
 
 function subRank(sub, e){
@@ -836,6 +880,17 @@ function subRank(sub, e){
 // Candidates for one language, best first.
 function subsFor(e, code){
   return e.subs.filter(s=>s.lang === code).sort((a,b)=>subRank(b,e)-subRank(a,e));
+}
+
+// Whether this language's candidates are worth keeping as they are. Both halves
+// describe the same failure — OpenSubtitles truncating its answer — but a
+// language can survive the cut with a handful of entries that are all for some
+// other rip, which is no more useful than surviving it with none.
+function subThin(e, code){
+  const list = subsFor(e, code);
+  if(list.length < SUB_THIN) return true;
+  const target = e.pick ? (e.pick.release || e.pick.file || "") : "";
+  return !!target && subRank(list[0], e) < SUB_MATCH;
 }
 
 // Derived from e.subs, never fetched: e.subs holds every language the addon
@@ -1068,7 +1123,7 @@ function selectSeason(s){
   EPISODES = SHOW.vids.filter(v=>v.season===s)
     .sort((a,b)=>a.episode-b.episode)
     .map(v=>({season:v.season, episode:v.episode, id:v.id, name:v.name||"", state:"idle", all:[], alts:[], pick:null, on:true, open:false, fromSource:false,
-              subs:[], subPick:{}, subFixed:{}, subState:"idle", subOpen:false}));
+              subs:[], subPick:{}, subFixed:{}, subFilled:new Set(), subState:"idle", subOpen:false}));
   PROBE = null;
   renderStrip(); renderTable(); renderSources(); updateDock(); renderProbe();
   probeSeason(RUN);
@@ -1085,7 +1140,7 @@ function loadMovie(){
   SOURCE = null; SRCOPEN = false; STRIP_OPEN = false;
   EPISODES = [{season:0, episode:0, id:SHOW.id, name:SHOW.name||"", state:"idle", all:[], alts:[], pick:null,
                on:true, open:false, fromSource:false,
-               subs:[], subPick:{}, subFixed:{}, subState:"idle", subOpen:false}];
+               subs:[], subPick:{}, subFixed:{}, subFilled:new Set(), subState:"idle", subOpen:false}];
   PROBE = null;
   renderTable(); updateDock(); renderProbe();
   probeSeason(RUN);
@@ -1266,14 +1321,93 @@ async function probeSubs(run, ctrl){
     }
   });
   await Promise.all(workers);
+  if(run !== RUN) return;
+  await fillSubs(run, ctrl);
+}
+
+// One REST URL for one episode in one language. The path segments have to be in
+// alphabetical order of parameter name — the legacy API matches them by name and
+// quietly returns nothing when they arrive in any other order. A series episode
+// is addressed by the series' IMDb id plus season and episode, which is exactly
+// what Cinemeta's "tt0903747:1:3" ids carry.
+function subQuery(e, code){
+  const id = String(e.id||"");
+  const imdb = (id.match(/tt(\d+)/)||[])[1];
+  if(!imdb) return "";
+  const [, season, episode] = id.split(":");
+  const parts = season && episode
+    ? [`episode-${episode}`, `imdbid-${imdb}`, `season-${season}`]
+    : [`imdbid-${imdb}`];
+  parts.push(`sublanguageid-${OS_LANG[code] || code}`);
+  return `${OPENSUBS_REST}/${parts.join("/")}`;
+}
+
+// The addon pass asks for every language at once and gets a truncated answer;
+// this one asks REST for the languages that came back thin or empty, one request
+// per episode per language. It runs after that pass for the same reason both
+// subtitle passes run after the streams: the languages that arrived fine are
+// already on screen and must not wait for the ones that didn't.
+async function fillSubs(run, ctrl, langs){
+  const want = langs || cfg.sublangs;
+  if(!cfg.subs || !want.length || !EPISODES.length) return;
+  if(!ctrl){ ctrl = new AbortController(); ABORT = ctrl; }
+
+  const todo = [];
+  EPISODES.forEach((e,i)=>{
+    if(!e.pick) return;
+    want.forEach(code=>{
+      // asked at most once per season per language: the answer lives on in
+      // e.subs, so deselecting and reselecting a language stays free. Marked
+      // here rather than when the job runs, because a language toggled while
+      // this pass is still working starts a second one that would otherwise
+      // plan the same episode-language pairs all over again.
+      if(e.subFilled.has(code)) return;
+      if(!subThin(e, code)) return;
+      e.subFilled.add(code);
+      todo.push({i, code});
+    });
+  });
+  if(!todo.length) return;
+
+  new Set(todo.map(x=>x.i)).forEach(i=>{ EPISODES[i].subState = "probing"; renderRow(i); });
+
+  const workers = Array.from({length:4}, async ()=>{
+    while(todo.length){
+      if(run !== RUN) return;
+      const {i, code} = todo.shift();
+      const e = EPISODES[i];
+      try{
+        const url = subQuery(e, code);
+        if(url){
+          const rows = await getJSONRetry(url, true, ctrl.signal);
+          if(run !== RUN) return;
+          const have = new Set(e.subs.map(s=>s.url));
+          const add = (Array.isArray(rows) ? rows : [])
+            .map((s,k)=>parseRestSub(s, e.subs.length + k))
+            .filter(s=>s.url && s.lang === code && !have.has(s.url));
+          e.subs = e.subs.concat(add);
+        }
+      }catch(err){
+        // nothing to record on a failure: whatever the addon returned stands
+        if(err.name === "AbortError") return;
+      }
+      if(run !== RUN) return;
+      pickSubs(e);
+      e.subState = Object.keys(e.subPick).length ? "found" : "none";
+      renderRow(i); updateDock();
+    }
+  });
+  await Promise.all(workers);
 }
 
 // Turning subtitles on mid-season fetches once; a language change after that is
-// free, because e.subs already holds every language the addon returned.
+// free, because e.subs already holds every language the addon returned — unless
+// the language just selected is one the addon truncated away, which is the one
+// case fillSubs still has to go to the network for.
 function ensureSubs(){
   if(!EPISODES.length) return;
   if(cfg.subs && cfg.sublangs.length && SUBS_RUN !== RUN) probeSubs(RUN);
-  else repickSubs();
+  else { repickSubs(); fillSubs(RUN); }
 }
 
 // A language change only re-derives the picks — nothing goes back to the network.
@@ -1454,8 +1588,9 @@ function renderSubs(i){
     const list = subsFor(e, code);
     const g = document.createElement("div");
     g.className = "grp";
+    const ext = (e.subPick[code] && e.subPick[code].ext) || "srt";
     g.textContent = list.length
-      ? `${langName(code)} — saved as .${langTwo(code)}.srt`
+      ? `${langName(code)} — saved as .${langTwo(code)}.${ext}`
       : `${langName(code)} — none found`;
     h.appendChild(g);
 
@@ -1633,9 +1768,11 @@ function fileName(e){
 // Players load a subtitle automatically only when it sits beside the video under
 // the same name, so the video's own filename is the base and the language goes
 // in last: Show.S01E01.1080p.WEB.mkv -> Show.S01E01.1080p.WEB.he.srt
-function subFileName(e, code, url){
-  const m = String(url||"").match(/\.(vtt|ass|ssa|sub)(?:\?|$)/i);
-  const ext = m ? m[1].toLowerCase() : "srt";
+function subFileName(e, code, sub){
+  // A REST row states its format outright; the addon only hints at it in the
+  // URL, and the mirror links carry no extension at all — hence .srt last.
+  const m = String(sub && sub.url || "").match(/\.(vtt|ass|ssa|sub)(?:\?|$)/i);
+  const ext = (sub && sub.ext) || (m ? m[1].toLowerCase() : "srt");
   const base = fileName(e).replace(/\.[a-z0-9]{2,4}$/i, "");
   return `${base}.${langTwo(code)}.${ext}`.replace(/[\\/:*?"<>|]/g, "");
 }
@@ -1721,7 +1858,7 @@ async function saveSubsFor(eps){
     Object.keys(e.subPick||{}).forEach(code=>{
       const sub = e.subPick[code];
       if(!sub) return;
-      const name = subFileName(e, code, sub.url);
+      const name = subFileName(e, code, sub);
       // two episodes sharing one file (a two-parter in a season pack) share the
       // video name, so they'd write the same subtitle twice
       if(seen.has(name)) return;

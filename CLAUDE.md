@@ -50,6 +50,12 @@ component tree. Rendering is manual: mutate state, then call the matching
   protocol, no key. Chosen over the OpenSubtitles.com REST API because that one
   caps free accounts at a handful of downloads per day, which cannot serve a
   season.
+- OpenSubtitles legacy REST (`rest.opensubtitles.org/search`) — the per-language
+  second opinion the addon can't give. Same catalogue, no key, `ACAO: *`, but one
+  language per request. See **Subtitles** for when it is asked and why.
+- Stremio's subtitle mirror (`subs5.strem.io`) — the bytes of a REST result. The
+  record's own `SubDownloadLink` is a gzipped body from an origin the page can't
+  read; the mirror serves the same file as UTF-8 text with CORS headers.
 - Optional user-supplied CORS proxy prefix (`via()`).
 
 **State globals**: `SHOW` (`SHOW.type` is `"movie"` or `"series"`; `kind()`/`isMovie()`
@@ -112,16 +118,52 @@ season's `AbortController` and the same `RUN` guard. It is deliberately separate
 the stream links are the product, and a slow or broken subtitle addon must never
 delay them.
 
-- `e.subs` holds **every** language the addon returned, unfiltered; `e.subPick` is
-  derived from it by `pickSubs()`. So changing the language selection re-picks with
-  no network request at all. `SUBS_RUN` tracks which `RUN` has already been
-  fetched, so turning subtitles on mid-season fetches exactly once.
+- `e.subs` holds **every** language either source returned, unfiltered; `e.subPick`
+  is derived from it by `pickSubs()`. So changing the language selection re-picks
+  with no network request, unless the new language is one `fillSubs` has not asked
+  REST about yet. `SUBS_RUN` tracks which `RUN` the addon pass has already run for,
+  so turning subtitles on mid-season fetches exactly once; `e.subFilled` does the
+  same per language for the fill pass, and is marked at *plan* time so two
+  overlapping passes can't queue the same episode-language pair twice.
+
+### The fill pass (`fillSubs`)
+
+The addon asks for every language at once, and OpenSubtitles truncates that answer
+at ~100 rows in its own relevance order. A language with few uploads falls off the
+end: *Interstellar* comes back with 98 subtitles across 26 languages and not one
+of the 8 Hebrew ones that exist. So after the addon pass, `fillSubs` re-asks the
+legacy REST endpoint for the languages that came back badly, one request per
+episode per language.
+
+- `subThin(e, code)` decides what "badly" means: fewer than `SUB_THIN` candidates,
+  **or** a best `subRank` under `SUB_MATCH` — nothing sharing a tag, a group or a
+  resolution with the chosen torrent. The second half matters as much as the
+  first: *Interstellar*'s four English entries survive the cut and are all cam
+  rips, while REST's answer for that language holds 41 including the BluRay ones.
+  A title the addon answered well (Breaking Bad) costs no extra request at all.
+- `subQuery()` builds the URL. Its path segments must be in **alphabetical order
+  of parameter name** — the legacy API matches them by name and quietly returns
+  nothing otherwise — and a series episode is addressed by the series' IMDb id
+  plus season and episode, which is what Cinemeta's `tt0903747:1:3` ids carry.
+- `OS_LANG` maps the two canonical codes OpenSubtitles rejects (`gre`→`ell`,
+  `srp`→`scc`). The rest of `LANGS` passes through as-is.
+- Results are deduped against `e.subs` by URL, which works across both sources
+  because the addon links through the same mirror.
+- A failure is swallowed: whatever the addon returned stands.
 - A hand-picked subtitle goes in `e.subFixed[lang]` and survives a re-pick.
 - `subRank()` scores candidates against the **already-chosen torrent's** release
-  name, because a subtitle timed for a different rip drifts out of sync. When the
-  addon returns no name field, every score ties and it falls back to the addon's
-  own ordering (its download-count ranking) — an upgrade when metadata exists,
-  never a regression when it doesn't.
+  name, because a subtitle timed for a different rip drifts out of sync. When a
+  source returns no name field, every score ties and it falls back to that
+  source's own ordering (its download-count ranking) — an upgrade when metadata
+  exists, never a regression when it doesn't.
+- **`parseSub()` must keep reading `subtitleFileName`/`movieReleaseName`.** Those
+  are what opensubtitles-v3 actually sends, and it is the only subtitle addon
+  wired up here; without them every candidate is nameless, `subRank` ties on all
+  of them, and the ranking above silently degrades to "whatever came first".
+- `parseRestSub()` is the same shape from a REST row, plus `ext`: OpenSubtitles
+  carries `.ass` alongside `.srt` and the mirror URL doesn't say which, so the
+  format comes from the record and `subFileName()` takes the extension from the
+  subtitle rather than guessing from the URL.
 - `normLang()` resolves 2-letter codes, English names, and OpenSubtitles' own
   extras (`pob`) onto one canonical 3-letter code, and passes unknown codes
   through rather than dropping them. The *filename* uses the 2-letter form —
