@@ -274,8 +274,6 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
 .act.pri{background:var(--violet);border-color:var(--violet);color:#fff;font-weight:600}
 .act.pri:hover{background:#8E71FF}
 
-.note{margin-top:22px;padding:13px 15px;border:1px solid var(--rule);border-left:2px solid var(--amber);border-radius:3px;background:var(--panel);font-size:13px;color:var(--ink-dim);line-height:1.55}
-.note b{color:var(--ink)}
 .empty{padding:40px 0;text-align:center;color:var(--ink-faint);font-size:14px}
 .err{color:var(--bad)}
 /* ---- download queue ---- */
@@ -1114,12 +1112,10 @@ function renderShow(){
     </div>
     <div id="srcPanel"></div>`}
     <div id="tblWrap"></div>
-    <div class="note" id="note"></div>
   `;
   $(".showhead h1").textContent = SHOW.name;
   if(movie){
     $(".showhead p").textContent = [SHOW.year, SHOW.runtime, SHOW.id].filter(Boolean).join(" · ");
-    $("#note").innerHTML = `<b>Handing off:</b> press <b>Download</b> to hand the link to the browser.<br><b>Sources:</b> the best-seeded cached release is picked for you — click <b>choose source</b> on the row to take a different one; the one in use is highlighted.<br><b>Subtitles</b> ride along with it — the page saves them itself, named after the video (<span class="mono">…1080p.WEB.he.srt</span>), so players pick them up on their own. Each row’s <b>Subtitles</b> line names the languages found; click <b>choose subtitles</b> to swap one.<br><b>Not cached:</b> a source marked <span class="mono">⏳</span> stays unchecked — that link returns a placeholder file, not the movie, until Real-Debrid has pulled the torrent. Play it in Stremio once to start that, then re-open it here.`;
     return;
   }
   $("#btnAll").onclick = toggleAll;
@@ -1133,7 +1129,6 @@ function renderShow(){
     b.onclick=()=>selectSeason(s);
     sc.appendChild(b);
   });
-  $("#note").innerHTML = `<b>Handing off:</b> press <b>Download</b> — episodes run five at a time, oldest first. By default you press <b>next</b> yourself as each finishes; switch to <b>auto</b> in settings to have it watch your download folder and release the next as each file lands.<br><b>Subtitles</b> ride along with it — the page saves them itself, named after the video (<span class="mono">…1080p.WEB.he.srt</span>), so players pick them up on their own. Each row’s <b>Subtitles</b> line names the languages found; click <b>choose subtitles</b> to swap one.<br><b>Not cached:</b> episodes whose only sources are marked <span class="mono">⏳</span> stay unchecked — those links return a placeholder file, not the episode, until Real-Debrid has pulled the torrent. Play one in Stremio to start that, then re-pick the season.`;
 }
 
 function selectSeason(s){
