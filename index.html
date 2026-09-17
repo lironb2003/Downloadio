@@ -260,8 +260,12 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
   transform:translateY(110%);transition:transform .22s ease;
 }
 .dock.up{transform:none}
+/* margin-right keeps the pair packed left, clear of the bottom-right corner */
 .dock .count{font-family:"JetBrains Mono",monospace;font-size:12.5px;color:var(--ink-dim);margin-right:auto}
 .dock .count b{color:var(--ink)}
+/* Narrow enough and the count wraps into that same bottom-right corner, so the
+   badge eats the tail of it — hold the corner open and let the text wrap early. */
+@media (max-width:560px){ .dock{padding-right:130px} }
 .act{padding:8px 14px;border:1px solid var(--rule);border-radius:3px;font-size:13.5px;color:var(--ink-dim)}
 .act:hover{border-color:var(--violet);color:var(--ink)}
 .act.pri{background:var(--violet);border-color:var(--violet);color:#fff;font-weight:600}
@@ -382,8 +386,10 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
 </div>
 
 <div class="dock" id="dock">
-  <div class="count" id="count"></div>
+  <!-- Download sits at the left end: Netlify pins its badge to the bottom-right
+       corner of the deployed site, right on top of where this button used to be. -->
   <button class="act pri" id="btnDl">Download</button>
+  <div class="count" id="count"></div>
 </div>
 <div class="toast" id="toast"></div>
 
