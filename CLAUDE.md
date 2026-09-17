@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Downloadio is a single static page (`index.html`, ~1450 lines) that turns a Stremio
 debrid addon into a download list. Search a movie or series → for a series pick a
 season → probe every item against the addon → pick the best source per item → hand
-the links to JDownloader (clipboard) or the browser (download queue).
+the links to the browser (download queue).
 
 A movie is carried as a season of exactly one episode (`loadMovie()`), so probing,
 the alternatives list, subtitles, the dock and the queue all run unchanged. Only
@@ -184,7 +184,7 @@ episode per language.
   because the page writes the `.srt` files into that folder itself.
 - **`Q.dir` doubles as the subtitle destination, and the user's pick wins.** A
   page can't redirect a browser download, so the video lands wherever its
-  downloader puts it (the browser's folder, or JDownloader's); the subtitle is
+  downloader puts it (the browser's download folder); the subtitle is
   the only file this page places itself. An earlier version second-guessed the
   pick and sent subtitles after the videos whenever the two disagreed — that
   moved files somewhere nobody chose. `subDest()` now just honours `Q.dir`, and

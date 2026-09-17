@@ -48,6 +48,7 @@ header{
   padding:22px 0 14px;border-bottom:1px solid var(--rule);
   flex-wrap:wrap;
 }
+.logo{display:block;padding:0}
 .logo img{display:block;height:30px;width:auto}
 header .spacer{flex:1}
 .linkbtn{color:var(--ink-dim);font-size:13px;border-bottom:1px solid transparent;padding-bottom:1px}
@@ -302,7 +303,7 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
 <div class="wrap">
 
 <header>
-  <div class="logo"><img src="logo/downloadio-logo-horizontal-white.svg" alt="Downloadio" width="140" height="30"></div>
+  <button class="logo" id="home" title="Back to search" aria-label="Back to search"><img src="logo/downloadio-logo-horizontal-white.svg" alt="Downloadio" width="140" height="30"></button>
   <div class="spacer"></div>
   <button class="linkbtn" id="cfgToggle">settings</button>
 </header>
@@ -360,7 +361,7 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
       <button class="linkbtn" id="pickdir" type="button">choose…</button>
       <button class="linkbtn" id="cleardir" type="button">reset</button>
     </div>
-    <div class="hint">From OpenSubtitles. Each file is saved next to its video under the video's own name — <span class="mono">Show.S01E01.1080p.WEB.he.srt</span> — so players load it without being asked. With subtitles on, the folder prompt asks to <em>edit</em> files rather than view them, because the page writes the subtitles there itself.<br><b>Want everything in one folder?</b> Choose it above, and point whatever fetches the videos at the same place — Chrome at <span class="mono">chrome://settings/downloads</span> → Change, or JDownloader's own download folder. A page can't redirect a download, so the video always lands where its downloader puts it; the subtitle is the one file this page places itself.</div>
+    <div class="hint">From OpenSubtitles. Each file is saved next to its video under the video's own name — <span class="mono">Show.S01E01.1080p.WEB.he.srt</span> — so players load it without being asked. With subtitles on, the folder prompt asks to <em>edit</em> files rather than view them, because the page writes the subtitles there itself.<br><b>Want everything in one folder?</b> Choose it above, and point your browser's own download folder at the same place — Chrome at <span class="mono">chrome://settings/downloads</span> → Change. A page can't redirect a download, so the video always lands where its downloader puts it; the subtitle is the one file this page places itself.</div>
   </div>
   <div class="field">
     <label for="proxy">CORS proxy prefix (optional)</label>
@@ -382,7 +383,6 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
 
 <div class="dock" id="dock">
   <div class="count" id="count"></div>
-  <button class="act" id="btnCopy">Copy links</button>
   <button class="act pri" id="btnDl">Download</button>
 </div>
 <div class="toast" id="toast"></div>
@@ -1028,6 +1028,21 @@ async function search(){
   const grid = $("#stage .results");
   metas.forEach(m=>grid.appendChild(showCard(m)));
 }
+// The masthead logo goes back to the search screen. Leaving a title unloads it
+// the way a season switch does — bump RUN and drop the in-flight probes, or the
+// abandoned season keeps answering into state nothing is showing any more. The
+// queue panel is deliberately left alone: its downloads outlive the open title.
+function goHome(){
+  RUN++; cancelProbes();
+  SHOW = null; EPISODES = []; SEASON = null; SOURCE = null; SRCOPEN = false;
+  $("#q").value = "";
+  $("#stage").innerHTML = "";
+  updateDock();     // nothing selected any more, so the dock drops away
+  renderRecent();   // ...and the recents come back, now that the stage is clear
+  $("#q").focus();
+}
+$("#home").onclick = goHome;
+
 $("#goBtn").onclick = search;
 $("#q").addEventListener("keydown", e => { if(e.key==="Enter") search(); });
 renderRecent();   // the markup above this script is already parsed
@@ -1095,7 +1110,7 @@ function renderShow(){
   $(".showhead h1").textContent = SHOW.name;
   if(movie){
     $(".showhead p").textContent = [SHOW.year, SHOW.runtime, SHOW.id].filter(Boolean).join(" · ");
-    $("#note").innerHTML = `<b>Handing off:</b> keep JDownloader open with clipboard monitoring on and hit <b>Copy links</b>, or press <b>Download</b> to hand the link to the browser.<br><b>Sources:</b> the best-seeded cached release is picked for you — click <b>other sources</b> on the row to take a different one.<br><b>Subtitles</b> ride along with either button — the page saves them itself, named after the video (<span class="mono">…1080p.WEB.he.srt</span>), so players pick them up on their own. <span class="mono">CC</span> chips show what was found; click <b>choose subtitles</b> to swap one.<br><b>Not cached:</b> a source marked <span class="mono">⏳</span> stays unchecked — that link returns a placeholder file, not the movie, until Real-Debrid has pulled the torrent. Play it in Stremio once to start that, then re-open it here.`;
+    $("#note").innerHTML = `<b>Handing off:</b> press <b>Download</b> to hand the link to the browser.<br><b>Sources:</b> the best-seeded cached release is picked for you — click <b>other sources</b> on the row to take a different one.<br><b>Subtitles</b> ride along with it — the page saves them itself, named after the video (<span class="mono">…1080p.WEB.he.srt</span>), so players pick them up on their own. <span class="mono">CC</span> chips show what was found; click <b>choose subtitles</b> to swap one.<br><b>Not cached:</b> a source marked <span class="mono">⏳</span> stays unchecked — that link returns a placeholder file, not the movie, until Real-Debrid has pulled the torrent. Play it in Stremio once to start that, then re-open it here.`;
     return;
   }
   $("#btnAll").onclick = toggleAll;
@@ -1109,7 +1124,7 @@ function renderShow(){
     b.onclick=()=>selectSeason(s);
     sc.appendChild(b);
   });
-  $("#note").innerHTML = `<b>Handing off:</b> keep JDownloader open with clipboard monitoring on and hit <b>Copy links</b> — every episode lands in LinkGrabber at once.<br><b>Download</b> runs five at a time, oldest episode first. By default you press <b>next</b> yourself as each finishes; switch to <b>auto</b> in settings to have it watch your download folder and release the next as each file lands.<br><b>Subtitles</b> ride along with either button — the page saves them itself, named after the video (<span class="mono">…1080p.WEB.he.srt</span>), so players pick them up on their own. <span class="mono">CC</span> chips show what each episode found; click <b>choose subtitles</b> to swap one.<br><b>Not cached:</b> episodes whose only sources are marked <span class="mono">⏳</span> stay unchecked — those links return a placeholder file, not the episode, until Real-Debrid has pulled the torrent. Play one in Stremio to start that, then re-pick the season.`;
+  $("#note").innerHTML = `<b>Handing off:</b> press <b>Download</b> — episodes run five at a time, oldest first. By default you press <b>next</b> yourself as each finishes; switch to <b>auto</b> in settings to have it watch your download folder and release the next as each file lands.<br><b>Subtitles</b> ride along with it — the page saves them itself, named after the video (<span class="mono">…1080p.WEB.he.srt</span>), so players pick them up on their own. <span class="mono">CC</span> chips show what each episode found; click <b>choose subtitles</b> to swap one.<br><b>Not cached:</b> episodes whose only sources are marked <span class="mono">⏳</span> stay unchecked — those links return a placeholder file, not the episode, until Real-Debrid has pulled the torrent. Play one in Stremio to start that, then re-pick the season.`;
 }
 
 function selectSeason(s){
@@ -1804,7 +1819,7 @@ async function fetchSub(url){
 /* The page cannot choose where a browser download goes. A debrid link is
    cross-origin with no CORS headers, so the video has to be handed to the
    browser's own downloader, which saves it in whatever folder the browser is
-   configured to use — or to JDownloader, which uses its own.
+   configured to use.
 
    Subtitles are the one thing this page places itself, so the folder the user
    picked wins. An earlier version second-guessed that, sending them after the
@@ -1902,25 +1917,6 @@ function subToast(r){
   const no = r.blocked ? "no write access to the folder you picked" : "";
   toast([ok, no, bad].filter(Boolean).join(" · "));
 }
-
-$("#btnCopy").onclick = async ()=>{
-  const eps = selected();
-  const txt = eps.map(e=>e.pick.url).join("\n");
-  const subs = subCount();
-  try{
-    await navigator.clipboard.writeText(txt);
-    toast(`${eps.length} link${eps.length!==1?"s":""} copied${subs?` · saving ${subs} subtitle${subs!==1?"s":""}`:""}`);
-  }catch(err){
-    const ta=document.createElement("textarea");
-    ta.value=txt; document.body.appendChild(ta); ta.select();
-    document.execCommand("copy"); ta.remove(); toast("Links copied");
-  }
-  // Subtitle URLs are deliberately not in the clipboard payload: JDownloader
-  // would name them from the server and they'd never match the video. The page
-  // saves them itself — offering the same folder JDownloader writes into, so
-  // they land beside the episodes rather than in the default download folder.
-  if(subs) subToast(await saveSubsFor(eps));
-};
 
 /* ---------- download queue ----------
    Two modes, because a page gets no completion callback for downloads the
