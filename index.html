@@ -1529,6 +1529,7 @@ function renderRow(i){
 
   if(e.state==="probing"){
     const f=document.createElement("div"); f.className="file"; f.textContent="probing sources…"; body.appendChild(f);
+    const sm=subLine(e,i); if(sm) body.appendChild(sm);
   } else if(e.pick){
     const f=document.createElement("div"); f.className="file";
     f.textContent = e.pick.file || e.pick.label;
@@ -1552,32 +1553,7 @@ function renderRow(i){
       meta.appendChild(sw);
     }
     body.appendChild(meta);
-
-    // Subtitles get their own line. They are a separate decision from the
-    // release, and sharing one wrapped row left the two reading as one list —
-    // the language chips looked like more torrent metadata.
-    if(cfg.subs && cfg.sublangs.length && e.subState !== "idle"){
-      const sm=document.createElement("div"); sm.className="meta submeta";
-      const lbl=document.createElement("span");
-      lbl.className="mlabel"; lbl.textContent="Subtitles";
-      sm.appendChild(lbl);
-      if(e.subState === "probing"){
-        sm.appendChild(chip("searching…"));
-      }else{
-        cfg.sublangs.forEach(code=>{
-          // the language spelled out: "CC HE" told nobody what it was
-          const got = !!e.subPick[code];
-          sm.appendChild(chip(got ? langName(code) : `${langName(code)} — none found`, got, !got));
-        });
-        if(e.subs.length){
-          const sb=document.createElement("button");
-          sb.className="swap"; sb.textContent = e.subOpen ? "hide subtitles" : "choose subtitles";
-          sb.onclick=()=>{ e.subOpen=!e.subOpen; renderRow(i); renderSubs(i); };
-          sm.appendChild(sb);
-        }
-      }
-      body.appendChild(sm);
-    }
+    const sm=subLine(e,i); if(sm) body.appendChild(sm);
   } else if(e.state==="none"){
     const f=document.createElement("div"); f.className="file err";
     f.textContent = e.err ? `no result — ${e.err}` : "no debrid-ready source found";
@@ -1590,6 +1566,40 @@ function renderRow(i){
 
 function chip(txt, v, w){
   const c=document.createElement("span"); c.className="chip"+(v?" v":"")+(w?" w":""); c.textContent=txt; return c;
+}
+
+// Subtitles get their own line, from the moment the row appears. They are a
+// separate decision from the release, and sharing one wrapped row left the two
+// reading as one list — the language chips looked like more torrent metadata.
+//
+// The line is drawn even before the pass has reached this episode, because
+// probeSubs only starts once the whole season's streams are in (deliberately —
+// the links are the product). Without a placeholder the row looked like it had
+// found no subtitles, then grew a line minutes later. "idle" is that wait, not
+// an absence; only a finished pass reports what was actually found.
+function subLine(e, i){
+  if(!cfg.subs || !cfg.sublangs.length) return null;
+  const sm=document.createElement("div"); sm.className="meta submeta";
+  const lbl=document.createElement("span");
+  lbl.className="mlabel"; lbl.textContent="Subtitles";
+  sm.appendChild(lbl);
+
+  if(e.subState === "idle" || e.subState === "probing"){
+    sm.appendChild(chip(e.subState === "idle" ? "waiting…" : "searching…"));
+    return sm;
+  }
+  cfg.sublangs.forEach(code=>{
+    // the language spelled out: "CC HE" told nobody what it was
+    const got = !!e.subPick[code];
+    sm.appendChild(chip(got ? langName(code) : `${langName(code)} — none found`, got, !got));
+  });
+  if(e.subs.length){
+    const sb=document.createElement("button");
+    sb.className="swap"; sb.textContent = e.subOpen ? "hide subtitles" : "choose subtitles";
+    sb.onclick=()=>{ e.subOpen=!e.subOpen; renderRow(i); renderSubs(i); };
+    sm.appendChild(sb);
+  }
+  return sm;
 }
 
 function renderAlts(i){

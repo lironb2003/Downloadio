@@ -118,6 +118,14 @@ season's `AbortController` and the same `RUN` guard. It is deliberately separate
 the stream links are the product, and a slow or broken subtitle addon must never
 delay them.
 
+- `subLine()` draws the row's subtitle line from the moment the row appears,
+  including before the pass has reached that episode. Because the pass only
+  starts once the whole season's streams are in, a line that rendered only on
+  results popped into existence long after the row and read, until then, as
+  "this episode has no subtitles". `subState` "idle" is therefore rendered as
+  *waiting…*, "probing" as *searching…*, and only a finished pass reports
+  languages. An episode with no source never gets the line at all — `probeSubs`
+  skips it, so there is nothing to wait for.
 - `e.subs` holds **every** language either source returned, unfiltered; `e.subPick`
   is derived from it by `pickSubs()`. So changing the language selection re-picks
   with no network request, unless the new language is one `fillSubs` has not asked
