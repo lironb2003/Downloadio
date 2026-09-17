@@ -216,6 +216,8 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
 }
 .ep .file a{color:var(--ink-faint)}
 .ep .meta{display:flex;gap:8px;flex-wrap:wrap;margin-top:5px}
+.ep .submeta{align-items:center}
+.ep .mlabel{font-size:11px;color:var(--ink-faint)}
 .chip{
   font-family:"JetBrains Mono",monospace;font-size:10.5px;letter-spacing:.03em;
   padding:2px 6px;border:1px solid var(--rule);border-radius:2px;color:var(--ink-dim);
@@ -231,6 +233,7 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
 .alts{padding:0 13px 11px 68px;background:var(--panel);border-bottom:1px solid var(--rule)}
 .alt{display:block;width:100%;text-align:left;padding:6px 9px;border:1px solid var(--rule);border-radius:2px;margin-bottom:5px;font-family:"JetBrains Mono",monospace;font-size:11.5px;color:var(--ink-dim);word-break:break-all}
 .alt:hover{border-color:var(--violet);color:var(--ink)}
+.alt.on{border-color:var(--violet);color:#A38EFF}
 
 /* ---- subtitles ---- */
 .langs{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}
@@ -1116,7 +1119,7 @@ function renderShow(){
   $(".showhead h1").textContent = SHOW.name;
   if(movie){
     $(".showhead p").textContent = [SHOW.year, SHOW.runtime, SHOW.id].filter(Boolean).join(" · ");
-    $("#note").innerHTML = `<b>Handing off:</b> press <b>Download</b> to hand the link to the browser.<br><b>Sources:</b> the best-seeded cached release is picked for you — click <b>other sources</b> on the row to take a different one.<br><b>Subtitles</b> ride along with it — the page saves them itself, named after the video (<span class="mono">…1080p.WEB.he.srt</span>), so players pick them up on their own. <span class="mono">CC</span> chips show what was found; click <b>choose subtitles</b> to swap one.<br><b>Not cached:</b> a source marked <span class="mono">⏳</span> stays unchecked — that link returns a placeholder file, not the movie, until Real-Debrid has pulled the torrent. Play it in Stremio once to start that, then re-open it here.`;
+    $("#note").innerHTML = `<b>Handing off:</b> press <b>Download</b> to hand the link to the browser.<br><b>Sources:</b> the best-seeded cached release is picked for you — click <b>choose source</b> on the row to take a different one; the one in use is highlighted.<br><b>Subtitles</b> ride along with it — the page saves them itself, named after the video (<span class="mono">…1080p.WEB.he.srt</span>), so players pick them up on their own. Each row’s <b>Subtitles</b> line names the languages found; click <b>choose subtitles</b> to swap one.<br><b>Not cached:</b> a source marked <span class="mono">⏳</span> stays unchecked — that link returns a placeholder file, not the movie, until Real-Debrid has pulled the torrent. Play it in Stremio once to start that, then re-open it here.`;
     return;
   }
   $("#btnAll").onclick = toggleAll;
@@ -1130,7 +1133,7 @@ function renderShow(){
     b.onclick=()=>selectSeason(s);
     sc.appendChild(b);
   });
-  $("#note").innerHTML = `<b>Handing off:</b> press <b>Download</b> — episodes run five at a time, oldest first. By default you press <b>next</b> yourself as each finishes; switch to <b>auto</b> in settings to have it watch your download folder and release the next as each file lands.<br><b>Subtitles</b> ride along with it — the page saves them itself, named after the video (<span class="mono">…1080p.WEB.he.srt</span>), so players pick them up on their own. <span class="mono">CC</span> chips show what each episode found; click <b>choose subtitles</b> to swap one.<br><b>Not cached:</b> episodes whose only sources are marked <span class="mono">⏳</span> stay unchecked — those links return a placeholder file, not the episode, until Real-Debrid has pulled the torrent. Play one in Stremio to start that, then re-pick the season.`;
+  $("#note").innerHTML = `<b>Handing off:</b> press <b>Download</b> — episodes run five at a time, oldest first. By default you press <b>next</b> yourself as each finishes; switch to <b>auto</b> in settings to have it watch your download folder and release the next as each file lands.<br><b>Subtitles</b> ride along with it — the page saves them itself, named after the video (<span class="mono">…1080p.WEB.he.srt</span>), so players pick them up on their own. Each row’s <b>Subtitles</b> line names the languages found; click <b>choose subtitles</b> to swap one.<br><b>Not cached:</b> episodes whose only sources are marked <span class="mono">⏳</span> stay unchecked — those links return a placeholder file, not the episode, until Real-Debrid has pulled the torrent. Play one in Stremio to start that, then re-pick the season.`;
 }
 
 function selectSeason(s){
@@ -1544,27 +1547,37 @@ function renderRow(i){
     if(SOURCE && !e.fromSource) meta.appendChild(chip("other source", false, true));
     if(e.alts.length>1){
       const sw=document.createElement("button");
-      sw.className="swap"; sw.textContent = e.open ? "hide alternatives" : `${e.alts.length-1} other source${e.alts.length>2?"s":""}`;
+      sw.className="swap"; sw.textContent = e.open ? "hide sources" : "choose source";
       sw.onclick=()=>{ e.open=!e.open; renderRow(i); renderAlts(i); };
       meta.appendChild(sw);
     }
-    if(cfg.subs && cfg.sublangs.length){
+    body.appendChild(meta);
+
+    // Subtitles get their own line. They are a separate decision from the
+    // release, and sharing one wrapped row left the two reading as one list —
+    // the language chips looked like more torrent metadata.
+    if(cfg.subs && cfg.sublangs.length && e.subState !== "idle"){
+      const sm=document.createElement("div"); sm.className="meta submeta";
+      const lbl=document.createElement("span");
+      lbl.className="mlabel"; lbl.textContent="Subtitles";
+      sm.appendChild(lbl);
       if(e.subState === "probing"){
-        meta.appendChild(chip("CC …"));
-      }else if(e.subState !== "idle"){
+        sm.appendChild(chip("searching…"));
+      }else{
         cfg.sublangs.forEach(code=>{
+          // the language spelled out: "CC HE" told nobody what it was
           const got = !!e.subPick[code];
-          meta.appendChild(chip(`CC ${langTwo(code).toUpperCase()}${got?"":" ✗"}`, got, !got));
+          sm.appendChild(chip(got ? langName(code) : `${langName(code)} — none found`, got, !got));
         });
         if(e.subs.length){
           const sb=document.createElement("button");
           sb.className="swap"; sb.textContent = e.subOpen ? "hide subtitles" : "choose subtitles";
           sb.onclick=()=>{ e.subOpen=!e.subOpen; renderRow(i); renderSubs(i); };
-          meta.appendChild(sb);
+          sm.appendChild(sb);
         }
       }
+      body.appendChild(sm);
     }
-    body.appendChild(meta);
   } else if(e.state==="none"){
     const f=document.createElement("div"); f.className="file err";
     f.textContent = e.err ? `no result — ${e.err}` : "no debrid-ready source found";
@@ -1588,7 +1601,11 @@ function renderAlts(i){
   h.className="alts";
   e.alts.forEach(a=>{
     const b=document.createElement("button");
-    b.className="alt";
+    // identity, not equality: e.pick is the very object this list was sliced
+    // from. A season-wide source picked past the top 8 marks nothing, which is
+    // honest — the release in use isn't one of the rows on screen.
+    b.className="alt" + (a === e.pick ? " on" : "");
+    if(a === e.pick) b.setAttribute("aria-current","true");
     b.textContent = `${a.cached===true?"⚡":a.cached===false?"⏳":"·"} ${String(a.seeders).padStart(4)} seeds · ${a.res?(a.res===2160?"4K":a.res+"p"):"?"} · ${a.gb?a.gb.toFixed(2)+"GB":"?"} · ${a.file || a.label}`;
     if(a.cached===false) b.title = "Not cached yet — this link serves a placeholder until Real-Debrid finishes downloading it.";
     b.onclick=()=>{ e.pick=a; e.on=true; e.open=false; syncOne(i); renderRow(i); updateDock(); };
@@ -1618,6 +1635,7 @@ function renderSubs(i){
     list.slice(0,8).forEach(s=>{
       const b = document.createElement("button");
       b.className = "sub" + (e.subPick[code] === s ? " on" : "");
+      if(e.subPick[code] === s) b.setAttribute("aria-current","true");
       // addon-supplied text: textContent, never innerHTML
       b.textContent = s.name || `subtitle ${s.id}`;
       b.onclick = ()=>{
