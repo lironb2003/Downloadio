@@ -224,6 +224,10 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
 }
 .chip.v{border-color:var(--violet-dim);color:#A38EFF}
 .chip.w{border-color:var(--amber);color:var(--amber)}
+/* a language chip opens its own list, so it has to read as a control */
+button.chip{cursor:pointer}
+button.chip:hover{border-color:var(--violet);color:#A38EFF}
+button.chip[aria-expanded="true"]{border-color:var(--violet);background:rgba(124,92,255,.12);color:#A38EFF}
 .ep .file.warn{color:var(--amber)}
 .ep.miss{opacity:.55}
 .ep .swap{font-size:11.5px;color:var(--ink-faint);border-bottom:1px solid transparent}
@@ -248,10 +252,15 @@ input[type=text]:focus,select:focus{border-color:var(--violet)}
 .subdirlabel{color:var(--ink-faint)}
 #subdir{color:#A38EFF;font-size:12px;word-break:break-all}
 .subs{padding:0 13px 11px 68px;background:var(--panel);border-bottom:1px solid var(--rule)}
-.subs .grp{font-size:11.5px;color:var(--ink-faint);margin:4px 0 5px}
+.subs .grp{font-size:11.5px;color:var(--ink-faint);margin:4px 0 5px;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+.subs .grp button{font-size:11.5px;color:var(--ink-faint);border-bottom:1px solid transparent}
+.subs .grp button:hover{color:var(--violet);border-color:var(--violet)}
 .sub{display:block;width:100%;text-align:left;padding:6px 9px;border:1px solid var(--rule);border-radius:2px;margin-bottom:5px;font-family:"JetBrains Mono",monospace;font-size:11.5px;color:var(--ink-dim);word-break:break-all}
 .sub:hover{border-color:var(--violet);color:var(--ink)}
 .sub.on{border-color:var(--violet);color:#A38EFF}
+/* the second line of a candidate: what it scored and what it is */
+.sub .det{display:block;margin-top:3px;font-size:10.5px;color:var(--ink-faint);word-break:normal}
+.sub.on .det{color:var(--ink-dim)}
 
 /* ---- dock ---- */
 .dock{
@@ -441,6 +450,12 @@ const SUB_THIN = 3;
 // release tag on subRank()'s scale — below it, not one candidate agrees with
 // our pick on a tag, a group or a resolution.
 const SUB_MATCH = 40;
+// How many candidates a language's list draws before "show N more". The REST
+// answer for a popular title runs past 40 and is ordered by how well each one
+// fits the chosen release, so the tail is rips of something else — but it is
+// still the catalogue, and a list that silently ends at 8 while claiming 41 is
+// worse than either showing them or saying which 8 these are.
+const SUB_PAGE = 8;
 
 // Torrentio's option name for each service, with the page that issues the key.
 // Both come from Torrentio's own /configure page.
@@ -846,7 +861,11 @@ function parseSub(s, idx){
   const name = [s.name, s.title, s.SubFileName, s.subtitleFileName,
                 s.filename, s.release, s.movieReleaseName]
     .find(v => typeof v === "string" && v.trim()) || "";
-  return {raw:s, id:String(s.id ?? idx), url:s.url, lang:normLang(s.lang), name:name.trim(), idx};
+  // The addon reports no rating and no download count — nothing but the release
+  // it was cut for. Those numbers only exist on the REST record, which is why
+  // opening a language asks REST for them (fillDetails).
+  return {raw:s, id:String(s.id ?? idx), url:s.url, lang:normLang(s.lang), name:name.trim(),
+          fmt:String(s.releaseFormat||""), grp:String(s.releaseGroup||""), idx};
 }
 
 // The same shape from a REST row. Its download link is built from the mirror
@@ -859,7 +878,56 @@ function parseRestSub(s, idx){
   return {raw:s, id:String(s.IDSubtitleFile || idx),
           url: s.IDSubtitleFile ? OPENSUBS_DL + s.IDSubtitleFile : "",
           lang: normLang(s.SubLanguageID), name: name.trim(),
-          ext: fmt === "ssa" ? "ass" : (/^(ass|sub|vtt)$/.test(fmt) ? fmt : "srt"), idx};
+          ext: fmt === "ssa" ? "ass" : (/^(ass|sub|vtt)$/.test(fmt) ? fmt : "srt"),
+          ...subMeta(s), idx};
+}
+
+// The numbers a REST row carries and the addon doesn't: what people scored it,
+// how many took it, and whether it is a hearing-impaired transcript (which
+// carries [door slams] through the whole file — worth knowing before you pick).
+// Rating is out of 10 and is 0.0 far more often than not, so votes travel with
+// it: "7.3" and "7.3 from 3 people" are not the same claim.
+function subMeta(s){
+  return {
+    rating: parseFloat(s.SubRating) || 0,
+    votes: parseInt(s.SubSumVotes, 10) || 0,
+    dls: parseInt(s.SubDownloadsCnt, 10) || 0,
+    hi: s.SubHearingImpaired === "1",
+    fmt: String(s.InfoFormat || ""),
+    grp: String(s.InfoReleaseGroup || ""),
+    added: String(s.SubAddDate || "").slice(0, 10)
+  };
+}
+
+// REST answers for a language the addon already covered, so the same subtitle
+// arrives twice. The addon's copy is the one on screen (and possibly already
+// ticked), so the numbers are folded into it rather than added beside it.
+function mergeSub(dst, src){
+  ["rating","votes","dls","hi","added","ext"].forEach(k=>{ if(src[k] !== undefined) dst[k] = src[k]; });
+  if(src.fmt) dst.fmt = src.fmt;
+  if(src.grp) dst.grp = src.grp;
+  if(!dst.name && src.name) dst.name = src.name;
+  return dst;
+}
+
+function subNum(n){
+  if(n >= 1e6) return (n/1e6).toFixed(1).replace(/\.0$/,"") + "M";
+  if(n >= 1e3) return (n/1e3).toFixed(n >= 1e4 ? 0 : 1).replace(/\.0$/,"") + "k";
+  return String(n);
+}
+
+// The detail line under a candidate. Everything here is optional: an addon row
+// that REST hasn't answered for yet has only the release format to show.
+function subDetail(s){
+  const bits = [];
+  if(s.rating) bits.push(`★ ${s.rating.toFixed(1)}/10${s.votes ? ` (${s.votes} vote${s.votes!==1?"s":""})` : ""}`);
+  else if(s.votes === 0 && s.dls) bits.push("★ unrated");
+  if(s.dls) bits.push(`${subNum(s.dls)} downloads`);
+  if(s.fmt) bits.push(s.fmt);
+  if(s.grp) bits.push(s.grp);
+  if(s.hi) bits.push("hearing-impaired");
+  if(s.added) bits.push(s.added);
+  return bits.join(" · ");
 }
 
 function subRank(sub, e){
@@ -902,21 +970,40 @@ function subThin(e, code){
 
 // Derived from e.subs, never fetched: e.subs holds every language the addon
 // returned, so changing the language selection re-picks without a new request.
+// A language holds a *list*, not one subtitle: one rip's timings fit and
+// another's don't, and which is which often only shows on playback, so the user
+// can keep several. The automatic pick is the single best; anything past that is
+// a ticked row.
 function pickSubs(e){
   const pick = {};
   cfg.sublangs.forEach(code=>{
     const fixed = e.subFixed[code];
-    if(fixed && e.subs.includes(fixed)){ pick[code] = fixed; return; }
+    // an empty hand-picked list means "none of these" and must not re-fill
+    if(fixed){ pick[code] = fixed.filter(s=>e.subs.includes(s)); return; }
     const best = subsFor(e, code)[0];
-    if(best) pick[code] = best;
+    pick[code] = best ? [best] : [];
   });
   e.subPick = pick;
   return pick;
 }
 
+// How many files this episode would actually write, across every language.
+function subTotal(e){
+  return Object.keys(e.subPick||{}).reduce((n,c)=>n + (e.subPick[c]||[]).length, 0);
+}
+
+// Ticking a row records the language's whole list, so it survives a re-pick.
+// Kept in subsFor order, because that decides which one gets the unnumbered
+// filename players load by themselves.
+function setSubs(e, code, chosen){
+  const list = subsFor(e, code).filter(s=>chosen.includes(s));
+  e.subPick[code] = list;
+  e.subFixed[code] = list;
+}
+
 function subCount(){
   if(!cfg.subs) return 0;
-  return selected().reduce((n,e)=>n + Object.keys(e.subPick||{}).length, 0);
+  return selected().reduce((n,e)=>n + subTotal(e), 0);
 }
 
 /* ---------- state ---------- */
@@ -1142,7 +1229,7 @@ function selectSeason(s){
   EPISODES = SHOW.vids.filter(v=>v.season===s)
     .sort((a,b)=>a.episode-b.episode)
     .map(v=>({season:v.season, episode:v.episode, id:v.id, name:v.name||"", state:"idle", all:[], alts:[], pick:null, on:true, open:false, fromSource:false,
-              subs:[], subPick:{}, subFixed:{}, subFilled:new Set(), subState:"idle", subOpen:false}));
+              subs:[], subPick:{}, subFixed:{}, subFilled:new Set(), subState:"idle", subOpen:null, subBusy:null, subShow:SUB_PAGE}));
   PROBE = null;
   renderStrip(); renderTable(); renderSources(); updateDock(); renderProbe();
   probeSeason(RUN);
@@ -1159,7 +1246,7 @@ function loadMovie(){
   SOURCE = null; SRCOPEN = false; STRIP_OPEN = false;
   EPISODES = [{season:0, episode:0, id:SHOW.id, name:SHOW.name||"", state:"idle", all:[], alts:[], pick:null,
                on:true, open:false, fromSource:false,
-               subs:[], subPick:{}, subFixed:{}, subFilled:new Set(), subState:"idle", subOpen:false}];
+               subs:[], subPick:{}, subFixed:{}, subFilled:new Set(), subState:"idle", subOpen:null, subBusy:null, subShow:SUB_PAGE}];
   PROBE = null;
   renderTable(); updateDock(); renderProbe();
   probeSeason(RUN);
@@ -1330,7 +1417,7 @@ async function probeSubs(run, ctrl){
         if(run !== RUN) return;
         e.subs = (d.subtitles||[]).map(parseSub).filter(s=>s.url && s.lang);
         pickSubs(e);
-        e.subState = Object.keys(e.subPick).length ? "found" : "none";
+        e.subState = subTotal(e) ? "found" : "none";
       }catch(err){
         if(err.name === "AbortError") return;
         e.subs = []; e.subPick = {}; e.subState = "none";
@@ -1359,6 +1446,23 @@ function subQuery(e, code){
     : [`imdbid-${imdb}`];
   parts.push(`sublanguageid-${OS_LANG[code] || code}`);
   return `${OPENSUBS_REST}/${parts.join("/")}`;
+}
+
+// What one REST answer adds to an episode: the rows it holds that e.subs hasn't
+// got, with the numbers on the rows it already has folded in. Deduped by URL,
+// which works across both sources because the addon links through the mirror.
+function restRows(e, rows, code){
+  const have = new Map(e.subs.map(s=>[s.url, s]));
+  const add = [];
+  (Array.isArray(rows) ? rows : [])
+    .map((s,k)=>parseRestSub(s, e.subs.length + k))
+    .forEach(s=>{
+      if(!s.url || s.lang !== code) return;
+      const seen = have.get(s.url);
+      if(seen) mergeSub(seen, s);
+      else { have.set(s.url, s); add.push(s); }
+    });
+  return add;
 }
 
 // The addon pass asks for every language at once and gets a truncated answer;
@@ -1400,11 +1504,7 @@ async function fillSubs(run, ctrl, langs){
         if(url){
           const rows = await getJSONRetry(url, true, ctrl.signal);
           if(run !== RUN) return;
-          const have = new Set(e.subs.map(s=>s.url));
-          const add = (Array.isArray(rows) ? rows : [])
-            .map((s,k)=>parseRestSub(s, e.subs.length + k))
-            .filter(s=>s.url && s.lang === code && !have.has(s.url));
-          e.subs = e.subs.concat(add);
+          e.subs = e.subs.concat(restRows(e, rows, code));
         }
       }catch(err){
         // nothing to record on a failure: whatever the addon returned stands
@@ -1412,11 +1512,40 @@ async function fillSubs(run, ctrl, langs){
       }
       if(run !== RUN) return;
       pickSubs(e);
-      e.subState = Object.keys(e.subPick).length ? "found" : "none";
+      e.subState = subTotal(e) ? "found" : "none";
       renderRow(i); updateDock();
     }
   });
   await Promise.all(workers);
+}
+
+// Opening a language asks REST for it, once per episode per language. The addon
+// answer carries no rating and no download count at all, so without this the
+// list the user opened to choose from would have nothing to choose on — and the
+// request is worth making here precisely because it was asked for: fillSubs
+// spends requests only where the addon answered badly, which is the right rule
+// for a whole season running unattended and the wrong one for one open list.
+async function fillDetails(i, code){
+  const e = EPISODES[i];
+  if(!e || !cfg.subs || e.subFilled.has(code)) return;
+  const url = subQuery(e, code);
+  if(!url) return;                  // marked only once we actually ask
+  e.subFilled.add(code);
+  const run = RUN, ctrl = ABORT;
+  e.subBusy = code; renderSubs(i);
+  try{
+    const rows = await getJSONRetry(url, true, ctrl && ctrl.signal);
+    if(run !== RUN) return;
+    e.subs = e.subs.concat(restRows(e, rows, code));
+    pickSubs(e);
+    e.subState = subTotal(e) ? "found" : "none";
+  }catch(err){
+    // a failure leaves the addon's own rows standing, details or not
+    if(err.name === "AbortError") return;
+  }
+  if(run !== RUN) return;
+  e.subBusy = null;
+  renderRow(i); updateDock();
 }
 
 // Turning subtitles on mid-season fetches once; a language change after that is
@@ -1435,7 +1564,7 @@ function repickSubs(){
   EPISODES.forEach((e,i)=>{
     if(e.subs.length){
       pickSubs(e);
-      e.subState = Object.keys(e.subPick).length ? "found" : "none";
+      e.subState = subTotal(e) ? "found" : "none";
     }
     renderRow(i);
   });
@@ -1544,7 +1673,9 @@ function renderRow(i){
     if(e.alts.length>1){
       const sw=document.createElement("button");
       sw.className="swap"; sw.textContent = e.open ? "hide sources" : "choose source";
-      sw.onclick=()=>{ e.open=!e.open; renderRow(i); renderAlts(i); };
+      // one panel per row — both lists drop into the same gap under the row, and
+      // two of them open at once read as one long list of unrelated things
+      sw.onclick=()=>{ e.open=!e.open; if(e.open) e.subOpen=null; renderRow(i); };
       meta.appendChild(sw);
     }
     body.appendChild(meta);
@@ -1559,8 +1690,8 @@ function renderRow(i){
   renderSubs(i);
 }
 
-function chip(txt, v, w){
-  const c=document.createElement("span"); c.className="chip"+(v?" v":"")+(w?" w":""); c.textContent=txt; return c;
+function chip(txt, v, w, tag){
+  const c=document.createElement(tag||"span"); c.className="chip"+(v?" v":"")+(w?" w":""); c.textContent=txt; return c;
 }
 
 // Subtitles get their own line, from the moment the row appears. They are a
@@ -1584,16 +1715,28 @@ function subLine(e, i){
     return sm;
   }
   cfg.sublangs.forEach(code=>{
-    // the language spelled out: "CC HE" told nobody what it was
-    const got = !!e.subPick[code];
-    sm.appendChild(chip(got ? langName(code) : `${langName(code)} — none found`, got, !got));
+    // the language spelled out ("CC HE" told nobody what it was) and how many
+    // files it will write, which is no longer always one — or even any
+    const n = (e.subPick[code]||[]).length;
+    if(!e.subs.some(s=>s.lang === code)){
+      sm.appendChild(chip(`${langName(code)} — none found`, false, true));
+      return;
+    }
+    // the chip *is* the control: each language opens its own list, so there is
+    // no one "choose subtitles" button to open all of them at once any more
+    const open = e.subOpen === code;
+    const b = chip(`${langName(code)} · ${n}`, n>0 || open, n===0 && !open, "button");
+    b.setAttribute("aria-expanded", String(open));
+    b.title = `${open ? "Hide" : "Choose"} ${langName(code)} subtitles`;
+    b.onclick = ()=>{
+      e.subOpen = open ? null : code;
+      if(e.subOpen) e.open = false;      // never both panels at once
+      e.subShow = SUB_PAGE;              // each language opens at its first page
+      renderRow(i);
+      if(!open) fillDetails(i, code);   // the ratings live on the REST record only
+    };
+    sm.appendChild(b);
   });
-  if(e.subs.length){
-    const sb=document.createElement("button");
-    sb.className="swap"; sb.textContent = e.subOpen ? "hide subtitles" : "choose subtitles";
-    sb.onclick=()=>{ e.subOpen=!e.subOpen; renderRow(i); renderSubs(i); };
-    sm.appendChild(sb);
-  }
   return sm;
 }
 
@@ -1624,33 +1767,83 @@ function renderSubs(i){
   if(!h) return;
   h.innerHTML = "";
   h.className = "";
-  if(!e.subOpen || !e.subs.length) return;
+  // one language at a time — whichever chip is open
+  const code = e.subOpen;
+  // a language deselected in settings while its list was open has no chip left
+  // to close it with, so the panel goes with it
+  if(!code || !e.subs.length || !cfg.sublangs.includes(code)) return;
   h.className = "subs";
 
-  cfg.sublangs.forEach(code=>{
-    const list = subsFor(e, code);
-    const g = document.createElement("div");
-    g.className = "grp";
-    const ext = (e.subPick[code] && e.subPick[code].ext) || "srt";
-    g.textContent = list.length
-      ? `${langName(code)} — saved as .${langTwo(code)}.${ext}`
-      : `${langName(code)} — none found`;
-    h.appendChild(g);
+  const list = subsFor(e, code);
+  const chosen = e.subPick[code] || [];
+  // Only the first page is drawn — a language can hold 40-odd candidates and the
+  // tail is rips of something else. A ticked one is always drawn though, however
+  // far down it ranks: a row the user can't see is a row they can't untick.
+  const cap = e.subShow || SUB_PAGE;
+  const shown = list.filter((s,k)=> k < cap || chosen.includes(s));
+  const hidden = list.length - shown.length;
 
-    list.slice(0,8).forEach(s=>{
-      const b = document.createElement("button");
-      b.className = "sub" + (e.subPick[code] === s ? " on" : "");
-      if(e.subPick[code] === s) b.setAttribute("aria-current","true");
-      // addon-supplied text: textContent, never innerHTML
-      b.textContent = s.name || `subtitle ${s.id}`;
-      b.onclick = ()=>{
-        e.subFixed[code] = s;      // a hand-picked one survives a re-pick
-        e.subPick[code] = s;
-        e.subOpen = false;
-        renderRow(i); updateDock();
-      };
-      h.appendChild(b);
-    });
+  const g = document.createElement("div");
+  g.className = "grp";
+  const lbl = document.createElement("span");
+  const ext = (chosen[0] && chosen[0].ext) || "srt";
+  // say what is on screen, not just what exists: "2 of 41 chosen" over a list of
+  // eight rows reads as a list that lost 33 of them
+  lbl.textContent = !list.length
+    ? `${langName(code)} — none found`
+    : hidden
+      ? `${langName(code)} — ${chosen.length} chosen · showing ${shown.length} of ${list.length} · saved as .${langTwo(code)}.${ext}`
+      : `${langName(code)} — ${chosen.length} of ${list.length} chosen · saved as .${langTwo(code)}.${ext}`;
+  g.appendChild(lbl);
+  // the buttons act on the rows on screen, not on the ones past the cut —
+  // "select all" must never pick something the user was never shown
+  if(shown.length > 1){
+    const all = document.createElement("button");
+    all.textContent = "select all";
+    all.onclick = ()=>{ setSubs(e, code, chosen.concat(shown)); renderRow(i); updateDock(); };
+    g.appendChild(all);
+    const none = document.createElement("button");
+    none.textContent = "deselect all";
+    none.onclick = ()=>{ setSubs(e, code, []); renderRow(i); updateDock(); };
+    g.appendChild(none);
+  }
+  if(hidden){
+    const more = document.createElement("button");
+    more.textContent = `show ${Math.min(hidden, SUB_PAGE)} more`;
+    // only the panel changes, so the row itself doesn't need redrawing
+    more.onclick = ()=>{ e.subShow = cap + SUB_PAGE; renderSubs(i); };
+    g.appendChild(more);
+  }
+  // the ratings arrive a moment after the list does, so say so rather than
+  // letting a row look like it simply has nothing to report
+  if(e.subBusy === code){
+    const w = document.createElement("span");
+    w.textContent = "loading ratings…";
+    g.appendChild(w);
+  }
+  h.appendChild(g);
+
+  shown.forEach(s=>{
+    const on = chosen.includes(s);
+    const b = document.createElement("button");
+    b.className = "sub" + (on ? " on" : "");
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+    // addon-supplied text: textContent, never innerHTML
+    const nm = document.createElement("span");
+    nm.textContent = s.name || `subtitle ${s.id}`;
+    b.appendChild(nm);
+    const det = subDetail(s);
+    if(det){
+      const d = document.createElement("span");
+      d.className = "det"; d.textContent = det;
+      b.appendChild(d);
+    }
+    b.onclick = ()=>{
+      setSubs(e, code, on ? chosen.filter(x=>x!==s) : chosen.concat([s]));
+      // the panel stays open: ticking several in a row is the point of it
+      renderRow(i); updateDock();
+    };
+    h.appendChild(b);
   });
 }
 
@@ -1812,13 +2005,17 @@ function fileName(e){
 // Players load a subtitle automatically only when it sits beside the video under
 // the same name, so the video's own filename is the base and the language goes
 // in last: Show.S01E01.1080p.WEB.mkv -> Show.S01E01.1080p.WEB.he.srt
-function subFileName(e, code, sub){
+function subFileName(e, code, sub, n){
   // A REST row states its format outright; the addon only hints at it in the
   // URL, and the mirror links carry no extension at all — hence .srt last.
   const m = String(sub && sub.url || "").match(/\.(vtt|ass|ssa|sub)(?:\?|$)/i);
   const ext = (sub && sub.ext) || (m ? m[1].toLowerCase() : "srt");
   const base = fileName(e).replace(/\.[a-z0-9]{2,4}$/i, "");
-  return `${base}.${langTwo(code)}.${ext}`.replace(/[\\/:*?"<>|]/g, "");
+  // With several kept in one language the first takes the plain name and the
+  // rest are numbered — the number goes before the language, so the language
+  // stays the last tag, which is the part a player reads.
+  const seq = n ? `.${n+1}` : "";
+  return `${base}${seq}.${langTwo(code)}.${ext}`.replace(/[\\/:*?"<>|]/g, "");
 }
 
 /* ---------- saving subtitles ----------
@@ -1900,14 +2097,14 @@ async function saveSubsFor(eps){
   const seen = new Set();
   eps.forEach(e=>{
     Object.keys(e.subPick||{}).forEach(code=>{
-      const sub = e.subPick[code];
-      if(!sub) return;
-      const name = subFileName(e, code, sub);
-      // two episodes sharing one file (a two-parter in a season pack) share the
-      // video name, so they'd write the same subtitle twice
-      if(seen.has(name)) return;
-      seen.add(name);
-      jobs.push({sub, name});
+      (e.subPick[code]||[]).forEach((sub, n)=>{
+        const name = subFileName(e, code, sub, n);
+        // two episodes sharing one file (a two-parter in a season pack) share
+        // the video name, so they'd write the same subtitle twice
+        if(seen.has(name)) return;
+        seen.add(name);
+        jobs.push({sub, name});
+      });
     });
   });
   if(!jobs.length) return {done:0, failed:0};

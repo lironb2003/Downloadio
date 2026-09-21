@@ -126,8 +126,20 @@ delay them.
   *waiting…*, "probing" as *searching…*, and only a finished pass reports
   languages. An episode with no source never gets the line at all — `probeSubs`
   skips it, so there is nothing to wait for.
-- `e.subs` holds **every** language either source returned, unfiltered; `e.subPick`
-  is derived from it by `pickSubs()`. So changing the language selection re-picks
+- **The language chip is the control.** Each chip opens its own list, so
+  `e.subOpen` holds a language *code* (or `null`), not a boolean, and the panel
+  shows one language at a time. A language with no candidates stays a plain
+  `<span>` — there is nothing for it to open. Opening one also calls
+  `fillDetails()`, below.
+- **A row shows one panel at a time.** `e.open` (sources) and `e.subOpen`
+  (subtitles) each clear the other when set, because both panels drop into the
+  same gap under the row and two open at once read as one long list of unrelated
+  things. `renderRow()` redraws both holders, so a toggle only has to set the
+  state and call it.
+- `e.subs` holds **every** language either source returned, unfiltered;
+  `e.subPick[lang]` is an **array**, derived from it by `pickSubs()` — the
+  automatic pick is a list of one, and the user can tick as many rows per
+  language as they want. So changing the language selection re-picks
   with no network request, unless the new language is one `fillSubs` has not asked
   REST about yet. `SUBS_RUN` tracks which `RUN` the addon pass has already run for,
   so turning subtitles on mid-season fetches exactly once; `e.subFilled` does the
@@ -155,10 +167,24 @@ episode per language.
   plus season and episode, which is what Cinemeta's `tt0903747:1:3` ids carry.
 - `OS_LANG` maps the two canonical codes OpenSubtitles rejects (`gre`→`ell`,
   `srp`→`scc`). The rest of `LANGS` passes through as-is.
-- Results are deduped against `e.subs` by URL, which works across both sources
-  because the addon links through the same mirror.
+- Results go through `restRows()`, which dedupes against `e.subs` by URL — that
+  works across both sources because the addon links through the same mirror — and
+  **merges** (`mergeSub`) rather than discards a row it already has. The duplicate
+  is the point: the addon's copy is the one on screen and possibly already ticked,
+  and the REST copy is the only one carrying the numbers.
 - A failure is swallowed: whatever the addon returned stands.
-- A hand-picked subtitle goes in `e.subFixed[lang]` and survives a re-pick.
+- A hand-picked list goes in `e.subFixed[lang]` (via `setSubs()`) and survives a
+  re-pick. It is the whole language's list, so an **empty** array is meaningful —
+  "none of these" — and `pickSubs` must not read it as "never chosen" and refill
+  with the best candidate. The "select all"/"deselect all" buttons act on the
+  rows the panel actually shows, never on candidates past the cut.
+- **The panel draws one page at a time** (`SUB_PAGE`, `e.subShow`, "show N more"),
+  and the header says which page it is showing — `English — 2 chosen · showing 8
+  of 41`. A header that counted all 41 over a list that stopped at 8 read as a
+  list that had lost 33 of them. A **ticked** candidate is always drawn however
+  far down it ranks, because a row the user can't see is a row they can't untick;
+  that is why `shown` filters the list rather than slicing it.
+
 - `subRank()` scores candidates against the **already-chosen torrent's** release
   name, because a subtitle timed for a different rip drifts out of sync. When a
   source returns no name field, every score ties and it falls back to that
@@ -179,6 +205,9 @@ episode per language.
 - Files are named from `fileName(e)` + `.{two-letter}.srt`, so they sit beside the
   video under its own name and get loaded automatically. Names are deduped: two
   episodes sharing one file (a two-parter in a season pack) share a subtitle name.
+  With several kept in one language the first takes that plain name and the rest
+  are numbered *before* the language (`…S01E01.2.he.srt`), so the language stays
+  the last tag — the part a player reads — and only the first is auto-loaded.
 - **Subtitles never enter the download queue.** They are ~50KB from a host that
   isn't the debrid CDN, so none of the queue's spacing or completion-watching
   applies. `saveSubsFor()` fetches the bytes and then either writes into the
@@ -210,6 +239,29 @@ episode per language.
   temporal dead zone: the config wiring runs before `const Q` is initialised, and
   `typeof Q` does *not* guard a TDZ read — it throws, and an uncaught throw there
   takes the rest of the settings wiring down with it.
+
+### Details on a candidate (`fillDetails`)
+
+**opensubtitles-v3 reports no rating and no download count.** Its rows carry
+nothing but the filename and `releaseFormat`/`releaseGroup`. Rating, votes,
+downloads, the upload date and the hearing-impaired flag exist only on the legacy
+REST record — `subMeta()` reads them, `subDetail()` draws the line under each
+candidate. So opening a language asks REST for that one episode-language pair, and
+`mergeSub` folds the numbers onto the addon rows already on screen.
+
+That is deliberately a different rule from `fillSubs`, which spends a request only
+where the addon answered *badly*: the right rule for a whole season probing
+unattended, and the wrong one for a list a person just opened to choose from —
+there, a row without numbers is a row they can't judge. Both share `e.subFilled`,
+so a language the fill pass already asked about costs nothing to open.
+
+- `e.subBusy` holds the language being fetched, so the header says *loading
+  ratings…* rather than leaving the rows looking like they have nothing to report.
+- Rating is out of 10 and is `0.0` far more often than not, so votes travel with
+  it and a rated-by-nobody row reads *unrated*, not *0.0/10*. Downloads are the
+  number that is almost always there.
+- None of this feeds `subsFor()`'s ordering. The release match still decides the
+  pick; the numbers are shown so a person can overrule it, not used to rank.
 
 ## Download queue
 
